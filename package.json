@@ -1,0 +1,15 @@
+{
+  "name": "math-racing-game",
+  "version": "1.0.0",
+  "description": "6학년 2학기 소수의 나눗셈 스피드 레이서 (학급용 웹 게임)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

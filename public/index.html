@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>소수의 나눗셈 스피드 레이서</title>
+<style>
+  :root{--board:#1d3b2f;--board2:#16301f;--chalk:#f6f5ef;--sun:#ffc933;--green:#2ecc71;--yellow:#f1c40f;--red:#ff5a4f;--wood:#8a5a2b}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;background:#58b05a;color:var(--chalk);
+    font-family:'Pretendard','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',system-ui,sans-serif;
+    user-select:none;-webkit-user-select:none;touch-action:none}
+  #game{position:fixed;inset:0;width:100%;height:100%;display:block}
+  .hidden{display:none!important}
+  button{font:inherit;color:inherit;cursor:pointer;border:0}
+
+  /* 공통 칠판 카드 */
+  .screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(8,22,15,.66);overflow:auto}
+  .card{background:var(--board);border:6px solid var(--wood);border-radius:14px;padding:20px 26px;max-width:1040px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+  .title{margin:0;font-size:clamp(28px,4.6vw,54px);font-weight:900;font-style:italic;color:var(--sun);letter-spacing:-.02em;transform:skewX(-6deg);transform-origin:left;text-shadow:3px 3px 0 rgba(0,0,0,.35)}
+  .sub{margin:4px 0 0;font-size:clamp(13px,1.6vw,17px);opacity:.85}
+  .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:16px}
+  h3{margin:0 0 8px;font-size:17px}
+  #nums{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}
+  #nums button{padding:10px 0;border-radius:8px;background:rgba(255,255,255,.1);font-weight:700;font-size:17px;border:2px solid transparent}
+  #nums button.sel{background:var(--sun);color:#2a1d00;border-color:#fff}
+  #startBtn,.big{margin-top:14px;width:100%;padding:14px;border-radius:12px;background:var(--sun);color:#2a1d00;font-weight:900;font-size:24px;font-style:italic;box-shadow:0 5px 0 #b88a00}
+  #startBtn:disabled{opacity:.4;cursor:not-allowed}
+  #startBtn:active:not(:disabled),.big:active{transform:translateY(3px);box-shadow:0 2px 0 #b88a00}
+  .ghost{padding:10px 16px;border-radius:10px;background:rgba(255,255,255,.14);font-weight:700}
+  #lb{list-style:none;margin:0;padding:0;font-variant-numeric:tabular-nums}
+  #lb li{display:flex;justify-content:space-between;padding:6px 10px;border-bottom:1px dashed rgba(255,255,255,.22);font-size:16px}
+  #lb li:first-child{color:var(--sun);font-weight:800}
+  .how{margin:14px 0 0;padding-left:18px;font-size:14px;line-height:1.55;opacity:.92}
+  .how b{color:var(--sun)}
+
+  /* 퀴즈 */
+  #quiz{position:fixed;left:0;right:0;top:64px;bottom:0;display:flex;gap:14px;padding:10px 14px 14px;background:rgba(8,22,15,.55)}
+  .qleft,.qright{background:var(--board);border:5px solid var(--wood);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;min-height:0}
+  .qleft{flex:1.1}.qright{flex:.9}
+  .qtop{display:flex;align-items:center;gap:10px;font-weight:800}
+  #qlv{padding:3px 12px;border-radius:99px;color:#10231a}
+  #qexpr{margin:10px 0 2px;font-size:clamp(34px,6.4vw,76px);font-weight:900;text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap}
+  #qnote{min-height:1.4em;text-align:center;font-size:clamp(14px,1.9vw,20px);color:var(--sun);font-weight:700}
+  #qans{margin:10px auto 8px;min-width:60%;padding:6px 18px;border-radius:12px;background:rgba(0,0,0,.35);border:3px solid var(--sun);text-align:center;font-size:clamp(32px,5vw,56px);font-weight:900;font-variant-numeric:tabular-nums;min-height:1.35em}
+  #qans.shake{animation:shake .25s}
+  #qans .cur{display:inline-block;width:3px;height:.9em;background:var(--sun);margin-left:3px;vertical-align:-.1em;animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  @keyframes shake{25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+  #numpad{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:auto}
+  #numpad button{padding:clamp(6px,1.4vh,14px) 0;border-radius:10px;background:rgba(255,255,255,.13);font-size:clamp(18px,3vh,28px);font-weight:800}
+  #numpad button:active{background:rgba(255,255,255,.3)}
+  #numpad .enter{grid-column:1/4;background:var(--sun);color:#2a1d00;font-style:italic}
+  .qrhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-weight:800}
+  #pad{flex:1;width:100%;min-height:0;border-radius:8px;background:#122a1f;border:2px dashed rgba(255,255,255,.35);touch-action:none;cursor:crosshair}
+
+  /* 알림 배너 */
+  #banner{position:fixed;left:50%;top:70px;transform:translateX(-50%);max-width:92vw;padding:10px 20px;border-radius:12px;text-align:center;font-weight:800;font-size:clamp(16px,2.4vw,26px);line-height:1.4;z-index:5;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.4);white-space:pre-line}
+  #banner.ok{background:#1f8f4d}#banner.bad{background:#b3261e}
+
+  /* 터치 조작 */
+  #touch .pad{position:fixed;bottom:18px;display:flex;gap:12px}
+  #touch .l{left:18px}#touch .r{right:18px}
+  #touch button{width:clamp(70px,11vw,110px);height:clamp(70px,11vw,110px);border-radius:50%;background:rgba(10,25,18,.55);border:3px solid rgba(255,255,255,.7);font-size:34px;touch-action:none}
+  #touch button.on{background:var(--sun);color:#2a1d00}
+
+  /* 결과 */
+  #rtime{font-size:clamp(40px,8vw,84px);font-weight:900;font-style:italic;color:var(--sun);font-variant-numeric:tabular-nums;line-height:1}
+  #review{max-height:34vh;overflow:auto;margin:10px 0 0;padding:0;list-style:none}
+  #review li{padding:7px 10px;margin-bottom:6px;border-radius:8px;background:rgba(255,255,255,.08);font-size:15px;line-height:1.4}
+  #review .mine{color:#ff9a92}
+  .row{display:flex;gap:10px;margin-top:12px}.row>*{flex:1}
+  #mute{position:fixed;right:12px;top:12px;z-index:6;width:42px;height:42px;border-radius:50%;background:rgba(10,25,18,.55);font-size:20px}
+  @media (max-width:760px){.cols{grid-template-columns:1fr}#quiz{flex-direction:column;overflow:auto}}
+  @media (prefers-reduced-motion:reduce){#qans.shake{animation:none}}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<button id="mute" title="소리 켜기/끄기" tabindex="-1">🔊</button>
+<div id="banner" class="hidden"></div>
+
+<!-- 시작 화면 -->
+<div id="menu" class="screen">
+  <div class="card">
+    <h1 class="title">소수의 나눗셈 스피드 레이서</h1>
+    <p class="sub">6학년 2학기 · 톨게이트에서 난이도를 고르고, 정답으로 부스터를 얻어 최단 시간에 완주하세요!</p>
+    <div class="cols">
+      <div>
+        <h3>내 번호를 골라요</h3>
+        <div id="nums"></div>
+        <button id="startBtn" disabled>번호를 먼저 골라요</button>
+        <ul class="how">
+          <li><b>↑</b> 또는 <b>W</b> 가속 · <b>←→</b> 핸들 · <b>↓</b> 브레이크 (화면 버튼도 가능)</li>
+          <li>톨게이트 <b>3개 길</b> 중 하나로 들어가 문제를 풀어요. 어려울수록 부스터가 커요.</li>
+          <li>오답이면 <b>그 자리에서 2초간 빙글빙글!</b> 문제를 푸는 동안에도 시간은 흘러요.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>🏆 TOP 10 (최고 기록)</h3>
+        <ul id="lb"><li><span>불러오는 중…</span></li></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 문제 화면 -->
+<div id="quiz" class="hidden">
+  <div class="qleft">
+    <div class="qtop"><span id="qlv"></span><span id="qno"></span></div>
+    <div id="qexpr"></div>
+    <div id="qnote"></div>
+    <div id="qans"><span id="qansText"></span><span class="cur"></span></div>
+    <div id="numpad">
+      <button data-k="7" tabindex="-1">7</button><button data-k="8" tabindex="-1">8</button><button data-k="9" tabindex="-1">9</button>
+      <button data-k="4" tabindex="-1">4</button><button data-k="5" tabindex="-1">5</button><button data-k="6" tabindex="-1">6</button>
+      <button data-k="1" tabindex="-1">1</button><button data-k="2" tabindex="-1">2</button><button data-k="3" tabindex="-1">3</button>
+      <button data-k="." tabindex="-1">.</button><button data-k="0" tabindex="-1">0</button><button data-k="back" tabindex="-1">⌫</button>
+      <button data-k="enter" class="enter" tabindex="-1">정답 확인 (Enter)</button>
+    </div>
+  </div>
+  <div class="qright">
+    <div class="qrhead"><span>✏️ 필산 연습장</span><button class="ghost" id="padClear" tabindex="-1">지우기</button></div>
+    <canvas id="pad"></canvas>
+  </div>
+</div>
+
+<!-- 터치 조작 -->
+<div id="touch" class="hidden">
+  <div class="pad l"><button data-t="left" tabindex="-1">◀</button><button data-t="right" tabindex="-1">▶</button></div>
+  <div class="pad r"><button data-t="down" tabindex="-1">▼</button><button data-t="up" tabindex="-1">▲</button></div>
+</div>
+
+<!-- 결과 화면 -->
+<div id="result" class="screen hidden">
+  <div class="card" style="max-width:720px">
+    <h1 class="title" style="font-size:clamp(26px,4vw,40px)">🏁 완주!</h1>
+    <div id="rtime"></div>
+    <p class="sub" id="rsum"></p>
+    <p class="sub" id="rrank" style="color:var(--sun);font-weight:700"></p>
+    <h3 style="margin-top:14px">다시 보기</h3>
+    <ul id="review"></ul>
+    <div class="row">
+      <button class="ghost" id="retryBtn" tabindex="-1">기록 다시 보내기</button>
+      <button class="ghost" id="homeBtn" tabindex="-1">처음으로</button>
+      <button class="big" id="againBtn" tabindex="-1" style="margin:0;font-size:20px">다시 도전!</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* <GEN> ===================== 문제 생성 (6학년 2학기 소수의 나눗셈) =====================
+   모든 계산을 정수로 처리해서 JS 부동소수점 오차가 생기지 않아요.
+   n(정수)을 소수 d자리로 표시: fmt(n, d)  예) fmt(36,1) = "3.6" */
+const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+const pick = arr => arr[rnd(0, arr.length - 1)];
+const gcd = (a, b) => b ? gcd(b, a % b) : a;
+
+function fmt(n, d) {
+  let s = String(Math.abs(n));
+  if (d > 0) {
+    s = s.padStart(d + 1, '0');
+    s = s.slice(0, -d) + '.' + s.slice(-d);
+    s = s.replace(/\.?0+$/, '');
+  }
+  return (n < 0 ? '-' : '') + s;
+}
+
+// 학생이 입력한 문자열을 비교 가능한 형태로 정리 (".5" → "0.5", "2.40" → "2.4")
+function normInput(s) {
+  if (!s || s === '.') return null;
+  if (s[0] === '.') s = '0' + s;
+  if (s.indexOf('.') >= 0) { s = s.replace(/0+$/, ''); s = s.replace(/\.$/, ''); }
+  s = s.replace(/^0+(?=\d)/, '');
+  return s;
+}
+
+function mk(lv, type, dividend, divisor, ans, explain, note) {
+  return { lv, type, q: dividend + ' ÷ ' + divisor, note: note || '', ans, explain: explain.replace('{A}', ans) };
+}
+
+// ── 쉬움: 자릿수가 같은 (소수)÷(소수), 몫이 한 자리 자연수
+function genL1() {
+  for (;;) {
+    if (Math.random() < 0.6) {            // 3.6 ÷ 0.4 = 9
+      const a = rnd(2, 9), q = rnd(2, 9), D = a * q;
+      if (D % 10 === 0) continue;
+      return mk(1, 'sameDigits', fmt(D, 1), fmt(a, 1), String(q), `${fmt(D, 1)} ÷ ${fmt(a, 1)} ➔ ${D} ÷ ${a} = {A}`);
+    }
+    const a = rnd(11, 29), q = rnd(2, 6), D = a * q;   // 0.84 ÷ 0.12 = 7
+    if (a % 10 === 0 || D % 10 === 0) continue;
+    return mk(1, 'sameDigits', fmt(D, 2), fmt(a, 2), String(q), `${fmt(D, 2)} ÷ ${fmt(a, 2)} ➔ ${D} ÷ ${a} = {A}`);
+  }
+}
+
+// ── 보통: 자릿수가 다른 (소수)÷(소수), (자연수)÷(소수)
+const NAT_DIVISORS = [[2, 1], [4, 1], [5, 1], [8, 1], [15, 1], [25, 1], [25, 2], [75, 2]]; // [수, 소수자릿수]
+function genL2() {
+  if (Math.random() < 0.5) {              // 1.44 ÷ 0.6 = 2.4
+    for (;;) {
+      const a = rnd(2, 9), qi = rnd(12, 49), D = qi * a;
+      if (qi % 10 === 0 || D % 10 === 0) continue;
+      return mk(2, 'diffDigits', fmt(D, 2), fmt(a, 1), fmt(qi, 1), `${fmt(D, 2)} ÷ ${fmt(a, 1)} ➔ ${D} ÷ ${a * 10} = {A}`);
+    }
+  }
+  for (;;) {                               // 12 ÷ 0.25 = 48
+    const [a, dd] = pick(NAT_DIVISORS), p = Math.pow(10, dd);
+    const step = p / gcd(a, p), q = step * rnd(1, 40), N = q * a / p;
+    if (N < 3 || N > 60 || q < 6 || q > 150) continue;
+    return mk(2, 'natByDec', String(N), fmt(a, dd), String(q), `${N} ÷ ${fmt(a, dd)} ➔ ${N * p} ÷ ${a} = {A}`);
+  }
+}
+
+// ── 어려움: 몫이 소수 / 두 자리 소수끼리 / 몫 반올림 / 나머지
+function genL3() {
+  const r = Math.random();
+  if (r < 0.30) {                          // 7.36 ÷ 3.2 = 2.3
+    for (;;) {
+      const a = rnd(12, 49), qi = rnd(11, 59), D = qi * a;
+      if (qi % 10 === 0 || a % 10 === 0 || D % 10 === 0) continue;
+      return mk(3, 'decQuot', fmt(D, 2), fmt(a, 1), fmt(qi, 1), `${fmt(D, 2)} ÷ ${fmt(a, 1)} ➔ ${D} ÷ ${a * 10} = {A}`);
+    }
+  }
+  if (r < 0.55) {                          // 1.56 ÷ 0.12 = 13
+    for (;;) {
+      const a = rnd(11, 29), q = rnd(11, 29), D = a * q;
+      if (a % 10 === 0 || D % 10 === 0) continue;
+      return mk(3, 'twoDigits', fmt(D, 2), fmt(a, 2), String(q), `${fmt(D, 2)} ÷ ${fmt(a, 2)} ➔ ${D} ÷ ${a} = {A}`);
+    }
+  }
+  if (r < 0.80) {                          // 몫을 반올림하여 나타내기
+    for (;;) {
+      const rd = Math.random() < 0.7 ? 1 : 0;
+      const D = rnd(20, 99), a = pick([3, 6, 7, 9]);
+      if (D % 10 === 0 || D % a === 0) continue;
+      const k = rd === 1 ? 10 : 1;
+      if ((2 * k * D + a) % (2 * a) === 0) continue;            // 정확히 .5 인 경우 제외
+      const ans = Math.floor((2 * k * D + a) / (2 * a));        // 반올림(정수 계산)
+      const place = rd === 1 ? '소수 첫째 자리' : '일의 자리(자연수)';
+      return mk(3, 'round', fmt(D, 1), fmt(a, 1), rd === 1 ? fmt(ans, 1) : String(ans),
+        `${D} ÷ ${a} = ${(D / a).toFixed(3)}… ➔ 반올림하면 {A}`, `몫을 반올림하여 ${place}까지 구하세요`);
+    }
+  }
+  for (;;) {                               // 몫을 자연수까지, 나머지는? 27.4 ÷ 0.6 → 45 … 0.4
+    const D = rnd(50, 250), a = rnd(4, 9);
+    if (D % 10 === 0) continue;
+    const q = Math.floor(D / a), rem = D - a * q;
+    if (rem === 0 || q < 3) continue;
+    return mk(3, 'remainder', fmt(D, 1), fmt(a, 1), fmt(rem, 1),
+      `${D} ÷ ${a} = ${q} … ${rem} ➔ 나머지의 소수점은 원래 나눠지는 수 자리에 맞춰 {A}`, '몫을 자연수까지만 구할 때, 나머지는 얼마일까요?');
+  }
+}
+function genProblem(lv) { return lv === 1 ? genL1() : lv === 2 ? genL2() : genL3(); }
+/* </GEN> */
+
+(function () {
+'use strict';
+const $ = id => document.getElementById(id);
+
+/* ================= 설정 (밸런스는 여기만 고치면 돼요) ================= */
+const CFG = {
+  GATE_COUNT: 10, GATE_GAP: 300,          // 문제 10개, 300m마다 톨게이트
+  ROAD_W: 40, CAR_HW: 2.0, ZONE_LEN: 45, PREVIEW: 220,
+  MAX_V: 36, ACCEL: 20, DRAG: 7, BRAKE: 45, TURN: 1.7, LAUNCH_V: 16,
+  BOUNCE_DEG: 18, BUMP_SLOW: 0.6,          // 벽 충돌: 중앙 쪽으로 18도 자동 정렬 + 속도 40% 감소
+  SPIN_SEC: 2.0, SPIN_RATE: 10,            // 오답: 제자리 2초 회전
+  WRONG_BANNER_MS: 3500, RIGHT_BANNER_MS: 1600,
+  LEVELS: {                                // mul: 가속 배율, dur: 부스터 지속(초, 주행 중에만 흐름)
+    1: { name: '쉬움',   color: '#2ecc71', tint: 'rgba(46,204,113,.30)', mul: 1.3, dur: 2.0 },
+    2: { name: '보통',   color: '#f1c40f', tint: 'rgba(241,196,15,.30)', mul: 1.6, dur: 3.0 },
+    3: { name: '어려움', color: '#ff5a4f', tint: 'rgba(255,90,79,.30)',  mul: 2.3, dur: 4.5 }
+  }
+};
+const FINISH_Y = CFG.GATE_GAP * (CFG.GATE_COUNT + 1);
+const LANE_W = CFG.ROAD_W / 3, HW = CFG.ROAD_W / 2, DIV = 0.8;
+const IS_TOUCH = window.matchMedia && matchMedia('(pointer:coarse)').matches;
+
+/* ================= 트랙 ================= */
+const sm = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+function center(Y) {                       // 도로 중심선 (톨게이트 근처는 직선)
+  const d = Math.abs(Y - Math.round(Y / CFG.GATE_GAP) * CFG.GATE_GAP);
+  return sm((d - 35) / 80) * (34 * Math.sin(Y * 2 * Math.PI / 520) + 8 * Math.sin(Y * 2 * Math.PI / 260 + 1.3));
+}
+const slope = Y => (center(Y + 1) - center(Y - 1)) / 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ================= 상태 ================= */
+let state = 'MENU', student = null, maxStudents = 24;
+let car, boost, nextGate, results, usedQ, laneLock, problem;
+let quizLocked, answerStr, quizStart, raceStart, raceTime, spinT, cdT, goT, shakeT, zoom, sent, lastPost;
+let bannerTimer = null, menuY = 40;
+const keys = { left: false, right: false, up: false, down: false };
+const touch = { left: false, right: false, up: false, down: false };
+
+function resetRace() {
+  car = { X: 0, Y: 0, phi: 0, v: 0, spin: 0, vm: 0 };
+  boost = { mul: 1, t: 0 }; nextGate = 1; results = []; usedQ = new Set(); laneLock = {};
+  quizLocked = false; answerStr = ''; raceStart = null; raceTime = 0; shakeT = 0; zoom = 1; sent = false; spinT = 0; goT = 0; lastPost = null;
+}
+resetRace();
+
+function setState(s) {
+  state = s;
+  $('menu').classList.toggle('hidden', s !== 'MENU');
+  $('quiz').classList.toggle('hidden', s !== 'QUIZ');
+  $('result').classList.toggle('hidden', s !== 'FINISH');
+  $('touch').classList.toggle('hidden', !(IS_TOUCH && (s === 'DRIVING' || s === 'COUNTDOWN' || s === 'SPIN')));
+  if (s === 'QUIZ' || s === 'FINISH' || s === 'MENU') { for (const k in keys) keys[k] = false; for (const k in touch) touch[k] = false; document.querySelectorAll('#touch button').forEach(b => b.classList.remove('on')); }
+}
+
+/* ================= 소리 ================= */
+let actx = null, soundOn = true;
+function beep(f, d, type, vol, slide) {
+  if (!soundOn) return;
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+    o.type = type || 'square'; o.frequency.setValueAtTime(f, t);
+    if (slide) o.frequency.linearRampToValueAtTime(f + slide, t + d);
+    g.gain.setValueAtTime(vol || 0.05, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + d);
+  } catch (e) { /* 소리가 안 나도 게임은 계속 */ }
+}
+const sfx = {
+  tick: () => beep(660, .12), go: () => beep(990, .35, 'square', .06),
+  ok: () => { beep(660, .12); setTimeout(() => beep(990, .22), 110); },
+  bad: () => beep(220, .5, 'sawtooth', .06, -120),
+  bump: () => beep(120, .18, 'square', .07, -60),
+  boost: () => beep(300, .45, 'sawtooth', .05, 500),
+  gate: () => beep(520, .2, 'triangle', .06),
+  finish: () => { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, .25, 'triangle', .07), i * 130)); },
+  key: () => beep(880, .04, 'square', .02)
+};
+$('mute').onclick = () => { soundOn = !soundOn; $('mute').textContent = soundOn ? '🔊' : '🔇'; $('mute').blur(); };
+
+/* ================= 메뉴 ================= */
+const fmtT = ms => { const s = ms / 1000; return Math.floor(s / 60) + ':' + (s % 60).toFixed(1).padStart(4, '0'); };
+
+function buildNums() {
+  const box = $('nums'); box.innerHTML = '';
+  for (let i = 1; i <= maxStudents; i++) {
+    const b = document.createElement('button');
+    b.textContent = i; b.tabIndex = -1;
+    if (i === student) b.className = 'sel';
+    b.onclick = () => { student = i; try { localStorage.setItem('racer-student', i); } catch (e) {} buildNums(); updateStart(); };
+    box.appendChild(b);
+  }
+}
+function updateStart() {
+  $('startBtn').disabled = !student;
+  $('startBtn').textContent = student ? `${student}번 출발!` : '번호를 먼저 골라요';
+}
+async function loadMenu() {
+  try {
+    const c = await (await fetch('/api/config')).json();
+    maxStudents = c.maxStudents || 24;
+  } catch (e) {}
+  try { const s = parseInt(localStorage.getItem('racer-student'), 10); if (s >= 1 && s <= maxStudents) student = s; } catch (e) {}
+  buildNums(); updateStart(); loadBoard();
+}
+async function loadBoard() {
+  const ul = $('lb');
+  try {
+    const d = await (await fetch('/api/leaderboard')).json();
+    ul.innerHTML = d.length ? '' : '<li><span>아직 기록이 없어요. 첫 번째 도전자가 되어 보세요!</span></li>';
+    d.forEach((r, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span>${i + 1}위 · ${r.student}번</span><span>${fmtT(r.time)} · 오답 ${r.wrong}</span>`;
+      ul.appendChild(li);
+    });
+  } catch (e) { ul.innerHTML = '<li><span>기록을 불러오지 못했어요.</span></li>'; }
+}
+$('startBtn').onclick = () => { if (!student) return; startCountdown(); };
+
+/* ================= 진행 ================= */
+function startCountdown() {
+  resetRace(); setState('COUNTDOWN'); cdT = 2.4; sfx.tick();
+  if (actx && actx.state === 'suspended') actx.resume();
+}
+function showBanner(text, cls, ms) {
+  const b = $('banner'); b.textContent = text; b.className = cls; clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => b.classList.add('hidden'), ms);
+}
+
+function laneOf(rel) { return clamp(Math.floor((rel + HW) / LANE_W), 0, 2); }
+function zoneGate(Y) {
+  const i = Math.ceil(Y / CFG.GATE_GAP);
+  return (i >= 1 && i <= CFG.GATE_COUNT && Y >= i * CFG.GATE_GAP - CFG.ZONE_LEN) ? i : -1;
+}
+
+function updateDriving(dt) {
+  const steer = (keys.left || touch.left ? -1 : 0) + (keys.right || touch.right ? 1 : 0);
+  const gas = keys.up || touch.up, brake = keys.down || touch.down;
+  car.v += (gas ? CFG.ACCEL : -CFG.DRAG) * dt;
+  if (brake) car.v -= CFG.BRAKE * dt;
+  car.v = clamp(car.v, 0, CFG.MAX_V);
+  car.phi = clamp(car.phi + steer * CFG.TURN * Math.min(1, 0.35 + car.v / 14) * dt, -1.3, 1.3);
+
+  if (boost.t > 0) { boost.t -= dt; if (boost.t <= 0) { boost.t = 0; boost.mul = 1; } }
+  car.vm = car.v * (boost.t > 0 ? boost.mul : 1);
+  car.X += Math.sin(car.phi) * car.vm * dt;
+  car.Y += Math.cos(car.phi) * car.vm * dt;
+
+  // 벽/톨게이트 칸막이 충돌 (스마트 스티어링: 탄성 반발 + 중앙 쪽 자동 정렬)
+  const c = center(car.Y);
+  let lo = c - HW + CFG.CAR_HW, hi = c + HW - CFG.CAR_HW;
+  const zg = zoneGate(car.Y);
+  if (zg > 0) {
+    if (laneLock[zg] === undefined) laneLock[zg] = laneOf(car.X - c);
+    const L = laneLock[zg], e0 = c - HW + L * LANE_W, e1 = e0 + LANE_W;
+    lo = e0 + (L > 0 ? DIV : 0) + CFG.CAR_HW; hi = e1 - (L < 2 ? DIV : 0) - CFG.CAR_HW;
+  }
+  const alpha = Math.atan(slope(car.Y)), bounce = CFG.BOUNCE_DEG * Math.PI / 180;
+  if (car.X < lo) { car.X = lo + 0.05; car.phi = alpha + bounce; car.v *= CFG.BUMP_SLOW; shakeT = 0.25; sfx.bump(); }
+  else if (car.X > hi) { car.X = hi - 0.05; car.phi = alpha - bounce; car.v *= CFG.BUMP_SLOW; shakeT = 0.25; sfx.bump(); }
+
+  if (nextGate <= CFG.GATE_COUNT && car.Y >= nextGate * CFG.GATE_GAP) startQuiz();
+  else if (car.Y >= FINISH_Y) finish();
+}
+
+/* ---------- 문제 ---------- */
+function startQuiz() {
+  const g = nextGate, lv = laneLock[g] !== undefined ? laneLock[g] + 1 : laneOf(car.X - center(car.Y)) + 1;
+  let p;
+  for (let i = 0; i < 30; i++) { p = genProblem(lv); if (!usedQ.has(p.q)) break; }
+  usedQ.add(p.q); problem = p;
+  car.v = 0; car.vm = 0; car.Y = Math.max(car.Y, g * CFG.GATE_GAP);
+  quizLocked = false; answerStr = ''; quizStart = performance.now();
+  setState('QUIZ');
+  const L = CFG.LEVELS[lv];
+  $('qlv').textContent = L.name; $('qlv').style.background = L.color;
+  $('qno').textContent = `문제 ${g}/${CFG.GATE_COUNT}`;
+  $('qexpr').textContent = p.q; $('qnote').textContent = p.note;
+  refreshAnswer(); padInit(); sfx.gate();
+}
+function refreshAnswer() { $('qansText').textContent = answerStr; }
+function typeChar(c) {
+  if (state !== 'QUIZ' || quizLocked) return;
+  if (c === '.') { if (answerStr.includes('.')) return; if (answerStr === '') answerStr = '0'; }
+  else if (answerStr === '0') answerStr = '';
+  if (answerStr.length >= 8) return;
+  answerStr += c; refreshAnswer(); sfx.key();
+}
+function backspace() { if (state === 'QUIZ' && !quizLocked) { answerStr = answerStr.slice(0, -1); refreshAnswer(); } }
+function submit() {
+  if (state !== 'QUIZ' || quizLocked) return;
+  const val = normInput(answerStr);
+  if (val === null) { const a = $('qans'); a.classList.remove('shake'); void a.offsetWidth; a.classList.add('shake'); return; }
+  quizLocked = true;                                    // Enter 연타 방지
+  const ok = val === problem.ans, L = CFG.LEVELS[problem.lv];
+  results.push({ lv: problem.lv, type: problem.type, q: problem.q + (problem.note ? ' (' + problem.note + ')' : ''),
+    ans: problem.ans, given: answerStr, ok, ms: Math.round(performance.now() - quizStart), explain: problem.explain });
+  nextGate++;
+  const alpha = Math.atan(slope(car.Y));
+  if (ok) {
+    boost = { mul: L.mul, t: L.dur };
+    showBanner(`⭕ 정답!  ${L.name} 부스터 ×${L.mul} (${L.dur}초)`, 'ok', CFG.RIGHT_BANNER_MS);
+    sfx.ok(); setTimeout(sfx.boost, 250);
+    setState('DRIVING'); car.phi = alpha; car.v = CFG.LAUNCH_V; car.spin = 0;
+  } else {
+    showBanner(`❌ ${problem.explain}\n😵 그 자리에서 ${CFG.SPIN_SEC}초 동안 빙글빙글!`, 'bad', CFG.WRONG_BANNER_MS);
+    sfx.bad(); setState('SPIN'); spinT = CFG.SPIN_SEC; car.phi = alpha;
+  }
+}
+function updateSpin(dt) {
+  car.spin += CFG.SPIN_RATE * dt; spinT -= dt;
+  if (spinT <= 0) { car.spin = 0; car.v = CFG.LAUNCH_V; setState('DRIVING'); }
+}
+
+document.addEventListener('keydown', e => {
+  if (state === 'QUIZ') {
+    if (/^[0-9]$/.test(e.key)) typeChar(e.key);
+    else if (e.key === '.' || e.key === ',') typeChar('.');
+    else if (e.key === 'Backspace') backspace();
+    else if (e.key === 'Enter') submit();
+    else if (e.key === 'Escape') { if (!quizLocked) { answerStr = ''; refreshAnswer(); } }
+    e.preventDefault(); return;
+  }
+  const m = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down' }[e.code];
+  if (m) { keys[m] = true; e.preventDefault(); }
+});
+document.addEventListener('keyup', e => {
+  const m = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down' }[e.code];
+  if (m) keys[m] = false;
+});
+$('numpad').addEventListener('pointerdown', e => {
+  const b = e.target.closest('button'); if (!b) return; e.preventDefault();
+  const k = b.dataset.k;
+  if (k === 'back') backspace(); else if (k === 'enter') submit(); else typeChar(k);
+});
+document.querySelectorAll('#touch button').forEach(b => {
+  const k = b.dataset.t;
+  const on = e => { e.preventDefault(); b.setPointerCapture(e.pointerId); touch[k] = true; b.classList.add('on'); };
+  const off = () => { touch[k] = false; b.classList.remove('on'); };
+  b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off); b.addEventListener('lostpointercapture', off);
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden) { for (const k in keys) keys[k] = false; } });
+
+/* ---------- 필산 연습장 ---------- */
+const pad = $('pad'), pctx = pad.getContext('2d'); let pdraw = false;
+function padInit() {
+  const r = pad.getBoundingClientRect(), d = Math.min(window.devicePixelRatio || 1, 2);
+  pad.width = Math.max(1, Math.round(r.width * d)); pad.height = Math.max(1, Math.round(r.height * d));
+  pctx.lineWidth = 4 * d; pctx.lineCap = 'round'; pctx.lineJoin = 'round'; pctx.strokeStyle = '#f6f5ef';
+}
+const pp = e => { const r = pad.getBoundingClientRect(); return { x: (e.clientX - r.left) * pad.width / r.width, y: (e.clientY - r.top) * pad.height / r.height }; };
+pad.addEventListener('pointerdown', e => { pdraw = true; pad.setPointerCapture(e.pointerId); const p = pp(e); pctx.beginPath(); pctx.moveTo(p.x, p.y); pctx.lineTo(p.x + 0.1, p.y + 0.1); pctx.stroke(); });
+pad.addEventListener('pointermove', e => { if (!pdraw) return; const p = pp(e); pctx.lineTo(p.x, p.y); pctx.stroke(); pctx.beginPath(); pctx.moveTo(p.x, p.y); });
+['pointerup', 'pointercancel'].forEach(ev => pad.addEventListener(ev, () => { pdraw = false; }));
+$('padClear').addEventListener('pointerdown', e => { e.preventDefault(); padInit(); });
+
+/* ---------- 완주 / 결과 ---------- */
+function finish() {
+  raceTime = performance.now() - raceStart; car.v = 0; car.vm = 0;
+  setState('FINISH'); sfx.finish();
+  const okN = results.filter(r => r.ok).length;
+  $('rtime').textContent = fmtT(raceTime);
+  $('rsum').textContent = `${student}번 · 정답 ${okN}/${CFG.GATE_COUNT}`;
+  $('rrank').textContent = '기록을 보내는 중…';
+  const ul = $('review'); ul.innerHTML = '';
+  const wrong = results.filter(r => !r.ok);
+  if (!wrong.length) ul.innerHTML = '<li>🎉 전부 맞혔어요! 완벽해요!</li>';
+  wrong.forEach(r => {
+    const li = document.createElement('li');
+    li.innerHTML = `<div>${r.q}</div><div>${r.explain}</div><div class="mine">내 답: ${r.given}</div>`;
+    ul.appendChild(li);
+  });
+  postResult();
+}
+async function postResult() {
+  $('retryBtn').classList.add('hidden');
+  const body = { student, time: Math.round(raceTime),
+    answers: results.map(r => ({ lv: r.lv, type: r.type, q: r.q, ans: r.ans, given: r.given, ok: r.ok, ms: r.ms })) };
+  lastPost = body;
+  try {
+    const res = await fetch('/api/result', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || '전송 실패');
+    $('rrank').textContent = `🏆 현재 ${d.rank}위 / ${d.total}명 · 내 최고 ${fmtT(d.best)}${d.isBest ? ' (신기록!)' : ''}`;
+    sent = true;
+  } catch (e) {
+    $('rrank').textContent = '⚠️ 기록을 보내지 못했어요. 아래 버튼으로 다시 보내 보세요.';
+    $('retryBtn').classList.remove('hidden');
+  }
+}
+$('retryBtn').onclick = () => { if (!sent) postResult(); };
+$('againBtn').onclick = () => startCountdown();
+$('homeBtn').onclick = () => { resetRace(); setState('MENU'); loadBoard(); };
+
+/* ================= 그리기 ================= */
+const cv = $('game'), ctx = cv.getContext('2d');
+let W = 0, H = 0, BASE = 7.5;
+function resize() {
+  const d = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W * d); cv.height = Math.round(H * d);
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+  BASE = 7.5 * (H / 720);
+  if (state === 'QUIZ') padInit();
+}
+window.addEventListener('resize', resize); resize();
+
+function quad(ax, ay, bx, by, cx, cy, dx, dy) {
+  ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx, cy); ctx.lineTo(dx, dy); ctx.closePath(); ctx.fill();
+}
+function rr(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); ctx.fill();
+}
+const FONT = "'Pretendard','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif";
+
+function render() {
+  const px = BASE * zoom, carSY = H * 0.8, Yc = car.Y, cx0 = center(Yc);
+  const toX = x => W / 2 + (x - cx0) * px, toY = y => carSY - (y - Yc) * px;
+  ctx.save();
+  if (shakeT > 0) ctx.translate((Math.random() - .5) * 8, (Math.random() - .5) * 8);
+  ctx.fillStyle = '#58b05a'; ctx.fillRect(-20, -20, W + 40, H + 40);
+
+  const step = 2, Ys = Math.floor((Yc - (H - carSY) / px - 8) / step) * step, Ye = Yc + carSY / px + 8;
+  for (let Y0 = Ys; Y0 < Ye; Y0 += step) {
+    const Y1 = Y0 + step, c0 = center(Y0), c1 = center(Y1), y0 = toY(Y0), y1 = toY(Y1) - 0.7;
+    if (Math.floor(Y0 / 24) % 2 === 0) { ctx.fillStyle = '#4fa652'; ctx.fillRect(-20, y1, W + 40, y0 - y1 + 0.7); }
+    ctx.fillStyle = (Math.floor(Y0 / 8) % 2) ? '#ffffff' : '#e8453c';
+    quad(toX(c0 - HW - 2.6), y0, toX(c0 - HW), y0, toX(c1 - HW), y1, toX(c1 - HW - 2.6), y1);
+    quad(toX(c0 + HW), y0, toX(c0 + HW + 2.6), y0, toX(c1 + HW + 2.6), y1, toX(c1 + HW), y1);
+    ctx.fillStyle = (Math.floor(Y0 / 16) % 2) ? '#454a57' : '#3f4450';
+    quad(toX(c0 - HW), y0, toX(c0 + HW), y0, toX(c1 + HW), y1, toX(c1 - HW), y1);
+    if (Math.floor(Y0 / 6) % 2 === 0) { ctx.fillStyle = 'rgba(255,255,255,.5)'; quad(toX(c0 - .3), y0, toX(c0 + .3), y0, toX(c1 + .3), y1, toX(c1 - .3), y1); }
+    if (Y0 >= 0 && Y0 < 2) { ctx.fillStyle = 'rgba(255,255,255,.85)'; quad(toX(c0 - HW), y0, toX(c0 + HW), y0, toX(c1 + HW), y1, toX(c1 - HW), y1); }
+    const gi = Math.ceil((Y0 + 0.001) / CFG.GATE_GAP), g = gi * CFG.GATE_GAP, dd = g - Y0;
+    if (gi >= 1 && gi <= CFG.GATE_COUNT && dd > 0) {
+      if (dd <= CFG.PREVIEW) for (let k = 0; k < 3; k++) {
+        const a = -HW + k * LANE_W, b = a + LANE_W; ctx.fillStyle = CFG.LEVELS[k + 1].tint;
+        quad(toX(c0 + a), y0, toX(c0 + b), y0, toX(c1 + b), y1, toX(c1 + a), y1);
+      }
+      if (dd <= CFG.ZONE_LEN) for (let k = 1; k <= 2; k++) {
+        const e = -HW + k * LANE_W; ctx.fillStyle = (Math.floor(Y0 / 4) % 2) ? '#ffffff' : '#e8453c';
+        quad(toX(c0 + e - DIV), y0, toX(c0 + e + DIV), y0, toX(c1 + e + DIV), y1, toX(c1 + e - DIV), y1);
+      }
+    }
+    if (Y0 >= FINISH_Y - 4 && Y0 < FINISH_Y + 4) {
+      const cw = CFG.ROAD_W / 20;
+      for (let k = 0; k < 20; k++) {
+        ctx.fillStyle = ((k + Math.floor(Y0 / 2)) % 2) ? '#ffffff' : '#15191f';
+        const a = -HW + k * cw, b = a + cw;
+        quad(toX(c0 + a), y0, toX(c0 + b), y0, toX(c1 + b), y1, toX(c1 + a), y1);
+      }
+    }
+  }
+
+  // 부스터 속도선
+  if (boost.t > 0 && state === 'DRIVING') {
+    ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 2; ctx.beginPath();
+    for (let i = 0; i < 16; i++) { const x = Math.random() * W, y = Math.random() * H, l = 40 + Math.random() * 70; ctx.moveTo(x, y); ctx.lineTo(x, y + l); }
+    ctx.stroke();
+  }
+
+  // 자동차
+  {
+    const s = px, x = toX(car.X);
+    ctx.save(); ctx.translate(x, carSY); ctx.rotate(car.phi + car.spin);
+    ctx.fillStyle = 'rgba(0,0,0,.25)'; rr(-1.9 * s, -3.0 * s, 4 * s, 7 * s, 1.2 * s);
+    if (boost.t > 0 && state === 'DRIVING') {
+      ctx.fillStyle = Math.random() < .5 ? '#ffb300' : '#ff5a1f';
+      ctx.beginPath(); ctx.moveTo(-1 * s, 3.4 * s); ctx.lineTo(0, (5.8 + Math.random() * 1.8) * s); ctx.lineTo(1 * s, 3.4 * s); ctx.fill();
+    }
+    ctx.fillStyle = '#14181f';
+    [[-2.1, -2.6], [1.4, -2.6], [-2.1, 1.2], [1.4, 1.2]].forEach(w => rr(w[0] * s, w[1] * s, 0.8 * s, 1.8 * s, 0.25 * s));
+    ctx.fillStyle = '#e8453c'; rr(-1.7 * s, -3.4 * s, 3.4 * s, 6.8 * s, 1.2 * s);
+    ctx.fillStyle = '#fff'; ctx.fillRect(-0.3 * s, -3.4 * s, 0.6 * s, 6.8 * s);
+    ctx.fillStyle = '#1b2a3a'; rr(-1.2 * s, -1.3 * s, 2.4 * s, 1.5 * s, 0.45 * s);
+    ctx.fillStyle = '#222'; ctx.fillRect(-1.9 * s, 2.7 * s, 3.8 * s, 0.7 * s);
+    ctx.restore();
+    if (state === 'SPIN') { ctx.font = `${Math.max(22, px * 3)}px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('💫', x, carSY - 4.5 * px); }
+  }
+
+  // 톨게이트 아치
+  for (let i = 1; i <= CFG.GATE_COUNT; i++) {
+    const y = toY(i * CFG.GATE_GAP); if (y < -140 || y > H + 140) continue;
+    const c = center(i * CFG.GATE_GAP), bh = Math.max(40, px * 5.4), pw = Math.max(8, px * 1.6);
+    ctx.fillStyle = '#2b2f3a'; ctx.fillRect(toX(c - HW) - pw, y - bh - 6, pw, bh + 12); ctx.fillRect(toX(c + HW), y - bh - 6, pw, bh + 12);
+    for (let k = 0; k < 3; k++) {
+      const L = CFG.LEVELS[k + 1], x = toX(c - HW + k * LANE_W), w = LANE_W * px;
+      ctx.fillStyle = L.color; ctx.fillRect(x, y - bh, w, bh);
+      ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.fillRect(x, y - 4, w, 4);
+      ctx.fillStyle = '#10231a'; ctx.textAlign = 'center';
+      ctx.font = `900 ${Math.max(15, px * 2.1)}px ${FONT}`; ctx.fillText(L.name, x + w / 2, y - bh * 0.55);
+      ctx.font = `700 ${Math.max(11, px * 1.3)}px ${FONT}`; ctx.fillText(`×${L.mul} · ${L.dur}초`, x + w / 2, y - bh * 0.2);
+    }
+    ctx.font = `800 ${Math.max(13, px * 1.7)}px ${FONT}`; ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,.55)';
+    ctx.strokeText(`문제 ${i}/${CFG.GATE_COUNT}`, toX(c), y - bh - 12); ctx.fillStyle = '#fff'; ctx.fillText(`문제 ${i}/${CFG.GATE_COUNT}`, toX(c), y - bh - 12);
+  }
+  ctx.restore();
+  drawHUD();
+}
+
+function outlined(text, x, y, size, color) {
+  ctx.font = `900 ${size}px ${FONT}`; ctx.textAlign = 'center'; ctx.lineWidth = size / 6; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineJoin = 'round';
+  ctx.strokeText(text, x, y); ctx.fillStyle = color || '#fff'; ctx.fillText(text, x, y);
+}
+function drawHUD() {
+  if (state === 'MENU') return;
+  const t = state === 'FINISH' ? raceTime : (raceStart ? performance.now() - raceStart : 0);
+  ctx.fillStyle = 'rgba(16,35,26,.82)'; ctx.fillRect(0, 0, W, 56);
+  ctx.textAlign = 'left'; ctx.fillStyle = '#ffc933'; ctx.font = `900 28px ${FONT}`; ctx.fillText(`⏱ ${(t / 1000).toFixed(1)}초`, 16, 38);
+  const bw = Math.min(W * 0.34, 420), bx = W / 2 - bw / 2;
+  ctx.fillStyle = 'rgba(255,255,255,.2)'; ctx.fillRect(bx, 24, bw, 8);
+  ctx.fillStyle = '#ffc933'; ctx.fillRect(bx, 24, bw * clamp(car.Y / FINISH_Y, 0, 1), 8);
+  for (let i = 1; i <= CFG.GATE_COUNT; i++) { ctx.fillStyle = i < nextGate ? '#2ecc71' : '#fff'; ctx.fillRect(bx + bw * (i * CFG.GATE_GAP / FINISH_Y) - 1.5, 19, 3, 18); }
+  ctx.textAlign = 'right'; ctx.fillStyle = '#fff'; ctx.font = `800 18px ${FONT}`;
+  ctx.fillText(`문제 ${Math.min(nextGate, CFG.GATE_COUNT)}/${CFG.GATE_COUNT}   ${Math.round(car.vm * 3.6)}km/h`, W - 64, 36);
+  if (boost.t > 0 && state === 'DRIVING') {
+    const L = Object.values(CFG.LEVELS).find(l => l.mul === boost.mul);
+    ctx.fillStyle = '#ff8a1f'; ctx.fillRect(0, 56, W * clamp(boost.t / (L ? L.dur : 3), 0, 1), 5);
+    outlined(`BOOST ×${boost.mul}`, W / 2, 96, 26, '#ffb300');
+  }
+  const dist = nextGate <= CFG.GATE_COUNT ? nextGate * CFG.GATE_GAP - car.Y : 999;
+  if (state === 'DRIVING' && dist < 190 && dist > 8) outlined(`🚦 문제 ${nextGate}! 가고 싶은 길로 들어가요`, W / 2, H * 0.2, 24, '#ffffff');
+  if (state === 'COUNTDOWN') outlined(cdT > 1.6 ? '3' : cdT > 0.8 ? '2' : '1', W / 2, H * 0.42, H * 0.28, '#ffc933');
+  if (goT > 0) outlined('GO!', W / 2, H * 0.42, H * 0.28, '#2ecc71');
+}
+
+/* ================= 메인 루프 ================= */
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);   // 탭을 내렸다 와도 물리가 튀지 않게 상한
+  last = now;
+  if (shakeT > 0) shakeT -= dt;
+  if (goT > 0) goT -= dt;
+  if (state === 'MENU') {
+    menuY = (menuY + 24 * dt) % (FINISH_Y - 200);
+    car.Y = menuY; car.X = center(menuY); car.phi = Math.atan(slope(menuY)); car.vm = 0; car.v = 0;
+  } else if (state === 'COUNTDOWN') {
+    const prev = Math.ceil(cdT / 0.8); cdT -= dt;
+    if (Math.ceil(cdT / 0.8) !== prev && cdT > 0) sfx.tick();
+    if (cdT <= 0) { setState('DRIVING'); raceStart = performance.now(); goT = 0.8; sfx.go(); }
+  } else if (state === 'DRIVING') updateDriving(dt);
+  else if (state === 'SPIN') updateSpin(dt);
+
+  if (state !== 'MENU') {
+    const dist = nextGate <= CFG.GATE_COUNT ? nextGate * CFG.GATE_GAP - car.Y : 999;
+    const near = clamp((190 - dist) / 50, 0, 1), fast = clamp((car.vm - 30) / 55, 0, 1);
+    const target = (1 - 0.30 * near) * (1 - 0.28 * fast);
+    zoom += (target - zoom) * Math.min(1, dt * 3);
+  } else zoom += (1 - zoom) * Math.min(1, dt * 3);
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+fetch('/ping').catch(() => {});      // 서버 깨우기(워밍업)
+loadMenu();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>스피드 레이서 - 교사용</title>
+<style>
+  body{margin:0;padding:24px;font-family:'Pretendard','Noto Sans KR','Malgun Gothic','Apple SD Gothic Neo',sans-serif;background:#eef1ec;color:#1b2a22}
+  h1{margin:0 0 4px;font-size:24px}
+  h2{margin:28px 0 8px;font-size:17px}
+  .sub{color:#5b6b61;font-size:14px}
+  .bar{display:flex;gap:8px;align-items:center;margin:14px 0}
+  button{font:inherit;padding:8px 14px;border:0;border-radius:8px;background:#1d3b2f;color:#fff;cursor:pointer}
+  button.danger{background:#b3261e}
+  table{border-collapse:collapse;background:#fff;width:100%;max-width:880px}
+  th,td{padding:8px 12px;border-bottom:1px solid #dde3dc;text-align:left;font-size:14px}
+  th{background:#dfe8df;font-weight:700}
+  .num{font-variant-numeric:tabular-nums}
+  .bad{color:#b3261e;font-weight:700}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:0 28px;align-items:start}
+  .empty{color:#6c7b71;padding:10px 0}
+</style>
+</head>
+<body>
+<h1>스피드 레이서 · 교사용</h1>
+<div class="sub">자동으로 10초마다 새로고침됩니다. 기록은 서버 저장소 상태에 따라 재시작 시 사라질 수 있어요.</div>
+<div class="bar"><button id="reload">지금 새로고침</button><button id="reset" class="danger">기록 전체 삭제</button><span id="total" class="sub"></span></div>
+
+<div class="grid">
+  <div><h2>난이도별 정답률 · 평균 풀이 시간</h2><table id="lv"></table>
+  <div class="sub" style="margin-top:6px">어려움의 평균 풀이 시간이 쉬움보다 너무 길면 부스터 보상(public/index.html 상단 LEVELS)을 더 올려 보세요.</div></div>
+  <div><h2>유형별 정답률</h2><table id="types"></table></div>
+</div>
+<div class="grid">
+  <div><h2>기록 순위 (학생별 최고)</h2><table id="rank"></table></div>
+  <div><h2>학생별 현황</h2><table id="stu"></table></div>
+</div>
+<h2>최근 오답 노트</h2><table id="wrong"></table>
+
+<script>
+const TYPE = {sameDigits:'(소수)÷(소수) 자릿수 같음',diffDigits:'(소수)÷(소수) 자릿수 다름',natByDec:'(자연수)÷(소수)',decQuot:'몫이 소수인 나눗셈',twoDigits:'소수 두 자리 ÷ 소수 두 자리',round:'몫 반올림',remainder:'나머지 구하기'};
+const LV = {1:'쉬움',2:'보통',3:'어려움'};
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtT = ms => { const s = ms/1000; return Math.floor(s/60) + ':' + (s%60).toFixed(1).padStart(4,'0'); };
+const pct = (a,b) => b ? Math.round(a/b*100) + '%' : '-';
+function table(el, head, rows){
+  const t = document.getElementById(el);
+  if(!rows.length){ t.innerHTML = '<tr><td class="empty">아직 기록이 없어요.</td></tr>'; return; }
+  t.innerHTML = '<tr>' + head.map(h => '<th>' + h + '</th>').join('') + '</tr>' + rows.map(r => '<tr>' + r.map(c => '<td class="num">' + c + '</td>').join('') + '</tr>').join('');
+}
+async function load(){
+  const r = await fetch('/teacher/stats');
+  if(!r.ok) return;
+  const d = await r.json();
+  document.getElementById('total').textContent = '총 ' + d.total + '판';
+  table('lv', ['난이도','문제 수','정답률','평균 풀이'], [1,2,3].map(k => { const l = d.levels[k]; return [LV[k], l.n, pct(l.ok,l.n), l.n ? (l.ms/l.n/1000).toFixed(1) + '초' : '-']; }));
+  table('types', ['유형','문제 수','정답률'], Object.entries(d.types).map(([k,v]) => [esc(TYPE[k]||k), v.n, pct(v.ok,v.n)]));
+  table('rank', ['순위','번호','시간','오답'], d.ranking.map((r,i) => [i+1, r.student + '번', fmtT(r.time), r.wrong]));
+  table('stu', ['번호','판 수','최고 기록','정답률'], d.students.map(s => [s.student + '번', s.games, fmtT(s.best), pct(s.ok,s.n)]));
+  table('wrong', ['번호','난이도','문제','학생 답','정답'], d.recentWrong.map(w => [w.student + '번', LV[w.lv], esc(w.q), '<span class="bad">' + esc(w.given) + '</span>', esc(w.ans)]));
+}
+document.getElementById('reload').onclick = load;
+document.getElementById('reset').onclick = async () => {
+  if(!confirm('모든 기록을 삭제할까요? 되돌릴 수 없어요.')) return;
+  await fetch('/teacher/reset', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:true})});
+  load();
+};
+load(); setInterval(load, 10000);
+</script>
+</body>
+</html>
