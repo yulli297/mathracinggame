@@ -38,7 +38,7 @@
 <h2>최근 오답 노트</h2><table id="wrong"></table>
 
 <script>
-const TYPE = {sameDigits:'(소수)÷(소수) 자릿수 같음',diffDigits:'(소수)÷(소수) 자릿수 다름',natByDec:'(자연수)÷(소수)',decQuot:'몫이 소수인 나눗셈',twoDigits:'소수 두 자리 ÷ 소수 두 자리',round:'몫 반올림',remainder:'나머지 구하기'};
+const TYPE = {sameDigits:'(소수)÷(소수) 자릿수 같음',diffDigits:'(소수)÷(소수) 자릿수 다름',natByDec:'(자연수)÷(소수)',decQuot:'몫이 소수인 나눗셈',twoDigits:'소수 두 자리 ÷ 소수 두 자리',shortDiv:'소수 한 자리 ÷ 소수 두 자리',round:'(이전) 몫 반올림',remainder:'(이전) 나머지 구하기'};
 const LV = {1:'쉬움',2:'보통',3:'어려움'};
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtT = ms => { const s = ms/1000; return Math.floor(s/60) + ':' + (s%60).toFixed(1).padStart(4,'0'); };
