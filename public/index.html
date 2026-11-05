@@ -263,12 +263,54 @@ const IS_TOUCH = window.matchMedia && matchMedia('(pointer:coarse)').matches;
 
 /* ================= 트랙 ================= */
 const sm = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
-function center(Y) {                       // 도로 중심선 (톨게이트 근처는 직선)
-  const d = Math.abs(Y - Math.round(Y / CFG.GATE_GAP) * CFG.GATE_GAP);
-  return sm((d - 35) / 80) * (34 * Math.sin(Y * 2 * Math.PI / 520) + 8 * Math.sin(Y * 2 * Math.PI / 260 + 1.3));
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+/* 커브 모양: [구간 안 위치(m), 기울기] 점들을 부드럽게 잇습니다.
+   기울기 1 = 앞으로 1m 갈 때 옆으로 1m (45°). 톨게이트 앞뒤 45m는 항상 직선이에요. */
+const CURVES = {
+  gentle:  { name: '',                pts: [[45, 0], [110, 0.45], [175, -0.45], [235, 0]] },
+  s:       { name: '〰️ S자 커브 구간!  좌우로 부드럽게 꺾어요', pts: [[40, 0], [80, 0.75], [130, -0.75], [180, 0.75], [225, 0]] },
+  hairpin: { name: '⚠️ F1 헤어핀 급커브!  ↓ 브레이크로 속도를 줄여요', sharp: true, pts: [[45, 0], [57, 1.25], [100, 1.25], [116, -1.25], [160, -1.25], [172, 0]] },
+  chicane: { name: '⚠️ F1 시케인 급커브!  ↓ 브레이크로 속도를 줄여요', sharp: true, pts: [[50, 0], [60, 1.2], [84, 1.2], [96, -1.2], [120, -1.2], [130, 0]] }
+};
+// 300m 구간마다 커브 종류와 방향(1 오른쪽, -1 왼쪽). 순서를 바꾸면 코스가 바뀌어요.
+const COURSE = [
+  ['gentle', 1], ['s', 1], ['hairpin', 1], ['gentle', -1], ['s', -1], ['chicane', 1],
+  ['hairpin', -1], ['s', 1], ['gentle', 1], ['s', -1], ['hairpin', 1]
+];
+function rawSlope(Y) {
+  const k = Math.floor(Y / CFG.GATE_GAP), seg = COURSE[k]; if (Y < 0 || !seg) return 0;
+  const u = Y - k * CFG.GATE_GAP, pts = CURVES[seg[0]].pts;
+  if (u <= pts[0][0] || u >= pts[pts.length - 1][0]) return 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [u0, s0] = pts[i], [u1, s1] = pts[i + 1];
+    if (u < u1) return seg[1] * (s0 + (s1 - s0) * sm((u - u0) / (u1 - u0)));
+  }
+  return 0;
+}
+// 중심선은 한 번만 계산해 두고(0.5m 간격) 읽기만 해요 → 매 프레임 계산 부담 없음
+const LUT_Y0 = -400, LUT_D = 0.5, LUT = new Float32Array(Math.ceil((CFG.GATE_GAP * (CFG.GATE_COUNT + 1) + 1000) / LUT_D));
+for (let i = 1, c = 0; i < LUT.length; i++) {
+  const y = LUT_Y0 + i * LUT_D; c += (rawSlope(y - LUT_D) + rawSlope(y)) / 2 * LUT_D; LUT[i] = c;
+}
+function center(Y) {                       // 도로 중심선
+  const f = clamp((Y - LUT_Y0) / LUT_D, 0, LUT.length - 1.001), i = Math.floor(f);
+  return LUT[i] + (LUT[i + 1] - LUT[i]) * (f - i);
 }
 const slope = Y => (center(Y + 1) - center(Y - 1)) / 2;
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// 급커브 꺾이는 지점 (안내 표지판용)
+const CORNERS = [];
+COURSE.forEach(([kind, dir], k) => {
+  const C = CURVES[kind]; if (!C.sharp) return;
+  for (let i = 0; i < C.pts.length - 1; i++) {
+    const d = (C.pts[i + 1][1] - C.pts[i][1]) * dir;
+    if (Math.abs(d) >= 1) CORNERS.push({ Y: k * CFG.GATE_GAP + (C.pts[i][0] + C.pts[i + 1][0]) / 2, turn: Math.sign(d) });
+  }
+});
+function curveAhead(Y) {                   // 곧 나올 커브 안내 문구
+  const k = Math.floor((Y + 80) / CFG.GATE_GAP), seg = COURSE[k]; if (!seg) return '';
+  const C = CURVES[seg[0]], s0 = k * CFG.GATE_GAP + C.pts[0][0];
+  return (C.name && Y > s0 - 80 && Y < s0 + 25) ? C.name : '';
+}
 
 /* ================= 도시 환경 (구간별 배경) =================
    구간 경계는 모두 30m의 배수라서 건물·나무가 경계에 걸치지 않아요. */
@@ -602,6 +644,20 @@ function lamp(xw, yw) {
   ctx.fillStyle = 'rgba(255,236,160,.25)'; ctx.beginPath(); ctx.arc(x, y, p * 2.2, 0, 6.283); ctx.fill();
   ctx.fillStyle = '#fff3b0'; ctx.beginPath(); ctx.arc(x, y, Math.max(2, p * 0.7), 0, 6.283); ctx.fill();
 }
+function cRange(y0, y1) {                 // y0~y1 사이 도로 중심선의 가장 왼쪽/오른쪽 (급커브에서 건물이 도로를 덮지 않게)
+  let a = center(y0), b = a;
+  for (let y = y0 + 2; y <= y1 + 2; y += 2) { const c = center(Math.min(y, y1)); if (c < a) a = c; if (c > b) b = c; }
+  return [a, b];
+}
+function chevron(xw, yw, turn) {           // 급커브 화살표 표지판
+  const p = cam.px, x = tx(xw), y = ty(yw), w = 3.6 * p, h = 2.4 * p;
+  if (x > W + w || x < -w || y > H + h || y < -h) return;
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(x - w / 2 + p * .4, y - h / 2 + p * .4, w, h);
+  ctx.fillStyle = '#ffd400'; ctx.fillRect(x - w / 2, y - h / 2, w, h);
+  ctx.strokeStyle = '#15191f'; ctx.lineWidth = Math.max(2, p * .45); ctx.lineJoin = 'miter'; ctx.beginPath();
+  for (const o of [-0.7, 0.5]) { const ax = x + (o * turn) * p; ctx.moveTo(ax - .5 * turn * p, y - .8 * p); ctx.lineTo(ax + .5 * turn * p, y); ctx.lineTo(ax - .5 * turn * p, y + .8 * p); }
+  ctx.stroke();
+}
 function drawScenery(Ys, Ye) {
   const LOT = 30, p = cam.px;
   for (let n = Math.floor(Ys / LOT) - 1; n <= Math.ceil(Ye / LOT); n++) {
@@ -612,19 +668,20 @@ function drawScenery(Ys, Ye) {
           const k = s * 7 + r;
           if (hash(n, k, 1) < 0.1) continue;
           const w = 10 + hash(n, k, 2) * 17, l = 19 + hash(n, k, 3) * 7, yw = Yl + 2 + hash(n, k, 4) * (26 - l), off = 36 + r * 34;
-          building(s < 0 ? cl - off - w : cl + off, yw, w, l, hash(n, k, 5), hash(n, k, 6), hash(n, k, 7));
+          const [ca, cb] = cRange(yw - 3, yw + l + 3);
+          building(s < 0 ? ca - off - w : cb + off, yw, w, l, hash(n, k, 5), hash(n, k, 6), hash(n, k, 7));
         }
       } else if (env === 'park') {
         for (let m = 0; m < 3; m++) {                                   // 울타리 관목 + 나무
           const Ym = Yl + m * 10;
           for (const hy of [2.5, 7.5]) { const cy = center(Ym + hy); tree(cy + s * (HW + 4.2), Ym + hy, 1.3, 0.1); }
           for (let t = 0; t < 2; t++) {
-            const kk = m * 5 + t * 13 + s * 3, y = Ym + hash(n, kk, 22) * 10;
-            tree(center(y) + s * (26 + hash(n, kk, 21) * 95), y, 2.4 + hash(n, kk, 23) * 2.8, hash(n, kk, 24));
+            const kk = m * 5 + t * 13 + s * 3, y = Ym + hash(n, kk, 22) * 10, R = 2.4 + hash(n, kk, 23) * 2.8, cr = cRange(y - R, y + R);
+            tree((s < 0 ? cr[0] : cr[1]) + s * (26 + hash(n, kk, 21) * 95), y, R, hash(n, kk, 24));
           }
         }
         if (hash(n, s, 30) < 0.55) {                                    // 화단
-          const y = Yl + 8 + hash(n, s, 32) * 14, xc = center(y) + s * (HW + 20), ex = tx(xc), ey = ty(y);
+          const y = Yl + 8 + hash(n, s, 32) * 14, cr = cRange(y - 3, y + 3), xc = (s < 0 ? cr[0] : cr[1]) + s * (HW + 20), ex = tx(xc), ey = ty(y);
           ctx.fillStyle = '#3f9a4a'; ctx.beginPath(); ctx.ellipse(ex, ey, p * 4, p * 2.4, 0, 0, 6.283); ctx.fill();
           for (let d = 0; d < 9; d++) {
             ctx.fillStyle = FLOWERS[Math.floor(hash(n, s * 10 + d, 33) * FLOWERS.length)];
@@ -632,7 +689,7 @@ function drawScenery(Ys, Ye) {
           }
         }
         if (hash(n, s, 31) < 0.3) {                                     // 연못
-          const y = Yl + 15, ex = tx(center(y) + s * (55 + hash(n, s, 36) * 20)), ey = ty(y), rx = p * (7 + hash(n, s, 37) * 4), ry = p * (5 + hash(n, s, 38) * 3);
+          const y = Yl + 15, cr = cRange(y - 9, y + 9), ex = tx((s < 0 ? cr[0] : cr[1]) + s * (55 + hash(n, s, 36) * 20)), ey = ty(y), rx = p * (7 + hash(n, s, 37) * 4), ry = p * (5 + hash(n, s, 38) * 3);
           ctx.fillStyle = '#d9d2b8'; ctx.beginPath(); ctx.ellipse(ex, ey, rx + p, ry + p, 0, 0, 6.283); ctx.fill();
           ctx.fillStyle = '#4aa3e0'; ctx.beginPath(); ctx.ellipse(ex, ey, rx, ry, 0, 0, 6.283); ctx.fill();
           ctx.fillStyle = 'rgba(255,255,255,.3)'; ctx.beginPath(); ctx.ellipse(ex - rx * .25, ey - ry * .3, rx * .35, ry * .2, 0, 0, 6.283); ctx.fill();
@@ -645,7 +702,7 @@ function drawScenery(Ys, Ye) {
           ctx.beginPath(); ctx.arc(x, yy, rr0, 0.3, 2.5); ctx.stroke();
         }
         if (hash(n, s, 44) < 0.25) {
-          const y = Yl + 15, bx = tx(center(y) + s * (30 + hash(n, s, 45) * 40)), by = ty(y);
+          const y = Yl + 15, cr = cRange(y - 7, y + 7), bx = tx((s < 0 ? cr[0] : cr[1]) + s * (30 + hash(n, s, 45) * 40)), by = ty(y);
           ctx.save(); ctx.translate(bx, by); ctx.rotate((hash(n, s, 46) - .5) * 0.5);
           ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(-p * .6, p * 4.5, p * 1.2, p * 7);
           ctx.fillStyle = '#f1f4f8'; ctx.beginPath(); ctx.moveTo(0, -p * 5); ctx.quadraticCurveTo(p * 2, -p * 2, p * 1.7, p * 4.5); ctx.lineTo(-p * 1.7, p * 4.5); ctx.quadraticCurveTo(-p * 2, -p * 2, 0, -p * 5); ctx.fill();
@@ -661,6 +718,8 @@ function drawScenery(Ys, Ye) {
       for (const s of [-1, 1]) lamp(center(Yt + 7.5) + s * (HW + 3.6), Yt + 7.5);
     }
   }
+  for (const c of CORNERS) if (c.Y > Ys - 20 && c.Y < Ye + 20)            // 급커브 바깥쪽 화살표 표지판
+    for (const dy of [-8, -2, 4]) { const y = c.Y + dy; chevron(center(y) - c.turn * (HW + 6), y, c.turn); }
 }
 
 function render() {
@@ -776,6 +835,7 @@ function drawHUD() {
   }
   const dist = nextGate <= CFG.GATE_COUNT ? nextGate * CFG.GATE_GAP - car.Y : 999;
   if (state === 'DRIVING' && dist < 190 && dist > 8) outlined(`🚦 문제 ${nextGate}! 가고 싶은 길로 들어가요`, W / 2, H * 0.2, 24, '#ffffff');
+  if (state === 'DRIVING') { const cw = curveAhead(car.Y); if (cw) outlined(cw, W / 2, H * 0.36, Math.min(26, W / 30), cw.startsWith('⚠️') ? '#ffb300' : '#9be7ff'); }
   if (state === 'COUNTDOWN') outlined(cdT > 1.6 ? '3' : cdT > 0.8 ? '2' : '1', W / 2, H * 0.42, H * 0.28, '#ffc933');
   if (toastT > 0 && state !== 'FINISH') outlined(ZONE_NAME[envNow] || '', W / 2, H * 0.28, 24, '#ffffff');
   if (goT > 0) outlined('GO!', W / 2, H * 0.42, H * 0.28, '#2ecc71');
