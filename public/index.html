@@ -250,6 +250,7 @@ const $ = id => document.getElementById(id);
 const CFG = {
   GATE_COUNT: 10,                         // 문제 10개 (톨게이트 위치는 아래 COURSE 구간 길이로 정해져요)
   ROAD_W: 40, CAR_HW: 2.0, ZONE_LEN: 45, PREVIEW: 220,
+  SEG_EXTRA: 150, SEG_SHIFT: 60,           // 구간마다 직선을 150m 더 (톨게이트 뒤 60m + 앞 90m) → 문제 사이 간격이 넓어져요
   MAX_V: 36, ACCEL: 20, DRAG: 7, BRAKE: 45, TURN: 1.7, LAUNCH_V: 16,
   BOUNCE_DEG: 18, BUMP_SLOW: 0.6,          // 벽 충돌: 중앙 쪽으로 18도 자동 정렬 + 속도 40% 감소
   SPIN_SEC: 2.0, SPIN_RATE: 10,            // 오답: 제자리 2초 회전
@@ -276,26 +277,30 @@ const CURVES = {
   hairpin: { len: 300, sharp: true, name: '⚠️ F1 헤어핀 급커브!  ↓ 브레이크로 속도를 줄여요', pts: [[45, 0], [80, 51], [105, 51], [172, -51], [197, -51], [232, 0]] },
   chicane: { len: 300, sharp: true, name: '⚠️ F1 시케인 급커브!  ↓ 브레이크로 속도를 줄여요', pts: [[45, 0], [79, 50], [94, 50], [128, 0], [143, 0], [177, -50], [192, -50], [226, 0]] },
   uturn:   { len: 450, sharp: true, big: true, name: '🔄 U자 커브 2연속!  ↓ 브레이크 밟고 크게 돌아요', pts: [[45, 0], [196, 180], [236, 180], [387, 0]] },
+  straight: { len: 750, straight: true, name: '🏁 F1 롱 스트레이트!  최고 속도로 쭉 달려요', pts: [] },
   u200:    { len: 560, sharp: true, big: true, name: '🌀 200° 초대형 커브!  ↓ 브레이크로 속도를 줄여요', pts: [[45, 0], [75, -20], [95, -20], [305, 180], [345, 180], [496, 0]] }
 };
 // 구간(톨게이트 사이)마다 커브 종류와 방향(1 오른쪽, -1 왼쪽). 순서를 바꾸면 코스가 바뀌어요.
 const COURSE = [
-  ['gentle', 1], ['s', 1], ['uturn', 1], ['gentle', -1], ['s', -1], ['chicane', 1],
+  ['gentle', 1], ['s', 1], ['uturn', 1], ['straight', 1], ['s', -1], ['chicane', 1],
   ['u200', -1], ['s', 1], ['gentle', 1], ['s', -1], ['hairpin', 1]
 ];
+// 긴 직선 구간은 문제를 푼 바로 뒤(톨게이트 다음)에 있어서, 어려움 부스터(×2.3, 4.5초)를 받은 학생이 가장 유리해요.
+const segShift = k => CURVES[COURSE[k][0]].straight ? 0 : CFG.SEG_SHIFT;
+const segLen = k => CURVES[COURSE[k][0]].len + (CURVES[COURSE[k][0]].straight ? 0 : CFG.SEG_EXTRA);
 const SEG_S = [0];                                   // 각 구간 시작 거리. GATE_S[i] = i번째 톨게이트 위치
-COURSE.forEach(([k]) => SEG_S.push(SEG_S[SEG_S.length - 1] + CURVES[k].len));
+COURSE.forEach((_, k) => SEG_S.push(SEG_S[k] + segLen(k)));
 const GATE_S = SEG_S.slice(0, CFG.GATE_COUNT + 1), FINISH_S = SEG_S[COURSE.length];
 // 톨게이트 색깔 길 미리보기 시작 위치 (U자 커브 위에는 칠하지 않고 마지막 직선에서만)
 const TINT_FROM = GATE_S.map((g, i) => {
   if (i < 1) return g; const C = CURVES[COURSE[i - 1][0]];
-  return g - (C.big ? C.len - C.pts[C.pts.length - 1][0] : CFG.PREVIEW);
+  return g - (C.big ? segLen(i - 1) - segShift(i - 1) - C.pts[C.pts.length - 1][0] : CFG.PREVIEW);
 });
 function segOf(s) { let k = 0; while (k < COURSE.length - 1 && s >= SEG_S[k + 1]) k++; return k; }
 function headingDeg(s) {
   if (s <= 0 || s >= FINISH_S) return 0;
-  const k = segOf(s), [kind, dir] = COURSE[k], pts = CURVES[kind].pts, u = s - SEG_S[k];
-  if (u <= pts[0][0] || u >= pts[pts.length - 1][0]) return 0;
+  const k = segOf(s), [kind, dir] = COURSE[k], pts = CURVES[kind].pts, u = s - SEG_S[k] - segShift(k);
+  if (!pts.length || u <= pts[0][0] || u >= pts[pts.length - 1][0]) return 0;
   for (let i = 0; i < pts.length - 1; i++) {
     const [u0, a0] = pts[i], [u1, a1] = pts[i + 1];
     if (u < u1) return dir * (a0 + (a1 - a0) * sm((u - u0) / (u1 - u0)));
@@ -353,20 +358,22 @@ COURSE.forEach(([kind, dir], k) => {
     const [u0, a0] = C.pts[i], [u1, a1] = C.pts[i + 1], d = (a1 - a0) * dir;
     if (Math.abs(d) < 45) continue;
     const n = Math.max(3, Math.round((u1 - u0) / 12));
-    for (let j = 0; j < n; j++) CORNERS.push({ s: SEG_S[k] + u0 + (u1 - u0) * (j + 0.5) / n, turn: Math.sign(d) });
+    for (let j = 0; j < n; j++) CORNERS.push({ s: SEG_S[k] + segShift(k) + u0 + (u1 - u0) * (j + 0.5) / n, turn: Math.sign(d) });
   }
 });
 function curveAhead(s) {                             // 곧 나올 커브 안내 문구
   const k = segOf(s + 80); if (s + 80 >= FINISH_S) return '';
-  const C = CURVES[COURSE[k][0]], s0 = SEG_S[k] + C.pts[0][0];
+  const C = CURVES[COURSE[k][0]];
+  if (C.straight) { const k2 = segOf(s); return (CURVES[COURSE[k2][0]].straight && s - SEG_S[k2] < 90) ? C.name : ''; }
+  const s0 = SEG_S[k] + segShift(k) + C.pts[0][0];
   return (C.name && s > s0 - 80 && s < s0 + 25) ? C.name : '';
 }
 
 /* ================= 도시 환경 (구간별 배경) =================
    [구간 번호(소수 가능), 배경] — 2.5는 3번째 구간의 가운데예요. */
-const ZONE_DEF = [[0, 'city'], [1.5, 'park'], [3.5, 'water'], [4.5, 'city'], [7, 'park'], [8.5, 'water'], [10.5, 'city']];
+const ZONE_DEF = [[0, 'city'], [1.5, 'park'], [3, 'water'], [4.5, 'city'], [7, 'park'], [8.5, 'water'], [10.5, 'city']];
 const ZONES = ZONE_DEF.map(([f, t], i) => {
-  const at = g => { const k = Math.min(Math.floor(g), COURSE.length - 1); return SEG_S[k] + (g - k) * CURVES[COURSE[k][0]].len; };
+  const at = g => { const k = Math.min(Math.floor(g), COURSE.length - 1); return SEG_S[k] + (g - k) * segLen(k); };
   return { s: i ? at(f) : -1e9, e: i < ZONE_DEF.length - 1 ? at(ZONE_DEF[i + 1][0]) : 1e9, t };
 });
 const ZONE_NAME = { city: '🏙️ 도심 거리', park: '🌳 시민공원 옆 도로', water: '🌉 강 위의 다리' };
@@ -967,7 +974,11 @@ function drawHUD() {
     outlined(`BOOST ×${boost.mul}`, W / 2, 96, 26, '#ffb300');
   }
   const dist = nextGate <= CFG.GATE_COUNT ? GATE_S[nextGate] - car.s : 999;
-  if (state === 'DRIVING' && dist < 190 && dist > 8) outlined(`🚦 문제 ${nextGate}! 가고 싶은 길로 들어가요`, W / 2, H * 0.2, 24, '#ffffff');
+  if (state === 'DRIVING' && dist < 190 && dist > 8) {
+    const longNext = COURSE[nextGate] && CURVES[COURSE[nextGate][0]].straight;
+    outlined(`🚦 문제 ${nextGate}! 가고 싶은 길로 들어가요`, W / 2, H * 0.2, 24, '#ffffff');
+    if (longNext) outlined('🏁 다음은 긴 직선! 어려움 부스터가 가장 유리해요', W / 2, H * 0.2 + 34, 20, '#ffb300');
+  }
   if (state === 'DRIVING') { const cw = curveAhead(car.s); if (cw) outlined(cw, W / 2, H * 0.36, Math.min(26, W / 30), cw.startsWith('⚠️') ? '#ffb300' : '#9be7ff'); }
   if (state === 'COUNTDOWN') outlined(cdT > 1.6 ? '3' : cdT > 0.8 ? '2' : '1', W / 2, H * 0.42, H * 0.28, '#ffc933');
   if (toastT > 0 && state !== 'FINISH') outlined(ZONE_NAME[envNow] || '', W / 2, H * 0.28, 24, '#ffffff');
