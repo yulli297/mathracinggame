@@ -10,7 +10,8 @@
   html,body{margin:0;height:100%;overflow:hidden;background:#58b05a;color:var(--chalk);
     font-family:'Pretendard','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',system-ui,sans-serif;
     user-select:none;-webkit-user-select:none;touch-action:none}
-  #game{position:fixed;inset:0;width:100%;height:100%;display:block}
+  #game{position:fixed;left:0;top:0;display:block;transform-style:flat;backface-visibility:hidden}
+  #hud{position:fixed;inset:0;width:100%;height:100%;display:block;pointer-events:none}
   .hidden{display:none!important}
   button{font:inherit;color:inherit;cursor:pointer;border:0}
 
@@ -78,6 +79,7 @@
 </head>
 <body>
 <canvas id="game"></canvas>
+<canvas id="hud"></canvas>
 <button id="mute" title="소리 켜기/끄기" tabindex="-1">🔊</button>
 <div id="banner" class="hidden"></div>
 
@@ -652,14 +654,27 @@ $('againBtn').onclick = () => startCountdown();
 $('homeBtn').onclick = () => { resetRace(); setState('MENU'); loadBoard(); };
 
 /* ================= 그리기 ================= */
-const cv = $('game'), ctx = cv.getContext('2d');
-let W = 0, H = 0, BASE = 7.5;
+/* 화면 구성: 도로를 그리는 캔버스(#game)를 화면보다 크게 만들고 CSS로 비스듬히 눕혀서 '약간 대각선 위에서 보는' 시점을 만들어요.
+   점수판·안내 글자는 눕히지 않은 위쪽 캔버스(#hud)에 따로 그려요. */
+const VIEW = {
+  TILT_DEG: 24,      // 기울기(도). 0이면 하늘에서 수직으로 보기, 클수록 낮게 비스듬히
+  ZOOM: 0.8,         // 화면 배율. 작을수록 넓게 보여요
+  CAR_Y: 0.72        // 화면에서 차의 세로 위치(0 맨 위 ~ 1 맨 아래)
+};
+const cv = $('game'), hud = $('hud'), wctx = cv.getContext('2d'), hctx = hud.getContext('2d');
+let ctx = wctx, W = 0, H = 0, VW = 0, VH = 0, CAR_SY = 0, BASE = 7.5;
 function resize() {
-  const d = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth; H = window.innerHeight;
-  cv.width = Math.round(W * d); cv.height = Math.round(H * d);
-  ctx.setTransform(d, 0, 0, d, 0, 0);
-  BASE = 7.5 * (H / 720);
+  VW = window.innerWidth; VH = window.innerHeight;
+  const tilt = VIEW.TILT_DEG > 0, side = tilt ? 0.25 : 0, top = tilt ? 0.45 : 0, bottom = tilt ? 0.08 : 0;
+  W = Math.round(VW * (1 + 2 * side)); H = Math.round(VH * (1 + top + bottom));
+  CAR_SY = VH * (top + VIEW.CAR_Y);
+  Object.assign(cv.style, { left: -VW * side + 'px', top: -VH * top + 'px', width: W + 'px', height: H + 'px',
+    transformOrigin: `50% ${CAR_SY}px`, transform: tilt ? `perspective(${VH * 1.2}px) rotateX(${VIEW.TILT_DEG}deg)` : 'none' });
+  const d = Math.min(window.devicePixelRatio || 1, tilt ? 1.25 : 2);   // 큰 캔버스라 해상도는 조금 낮춰 속도 확보
+  cv.width = Math.round(W * d); cv.height = Math.round(H * d); wctx.setTransform(d, 0, 0, d, 0, 0);
+  const dh = Math.min(window.devicePixelRatio || 1, 2);
+  hud.width = Math.round(VW * dh); hud.height = Math.round(VH * dh); hctx.setTransform(dh, 0, 0, dh, 0, 0);
+  BASE = 7.5 * VIEW.ZOOM * (VH / 720);
   if (state === 'QUIZ') padInit();
 }
 window.addEventListener('resize', resize); resize();
@@ -807,7 +822,7 @@ function nextGateAt(s) { for (let i = 1; i <= CFG.GATE_COUNT; i++) if (GATE_S[i]
 const ST = { s: [], x: [], y: [], nx: [], ny: [], k: [] };   // 이번 프레임에 그릴 도로 조각들(재사용)
 
 function render() {
-  const px = BASE * zoom, carSY = H * 0.8;
+  const px = BASE * zoom, carSY = CAR_SY;
   cam.fx = pX(car.s); cam.fy = pY(car.s); cam.px = px; cam.sy = carSY; cam.A = camA;
   const VR = Math.hypot(W, H) / px + 10;                // 화면에 보일 수 있는 최대 거리(m)
   ctx.save();
@@ -913,13 +928,22 @@ function render() {
   ctx.restore();
 
   // 6) 화면에 붙는 효과
+  if (VIEW.TILT_DEG > 0) {                               // 먼 곳은 살짝 뿌옇게 (지평선 느낌)
+    const g = ctx.createLinearGradient(0, 0, 0, CAR_SY - VH * 0.35);
+    g.addColorStop(0, 'rgba(214,232,250,.75)'); g.addColorStop(1, 'rgba(214,232,250,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, CAR_SY - VH * 0.35);
+  }
+  if (state === 'SPIN') { const [sx, sy] = w2s(car.X, car.Y); ctx.font = `${Math.max(22, px * 3)}px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('💫', sx, sy - 4.5 * px); }
+  // 여기부터는 눕히지 않은 위쪽 캔버스에 그려요
+  const sw = W, sh = H; ctx = hctx; W = VW; H = VH;
+  ctx.clearRect(0, 0, W, H);
   if (boost.t > 0 && state === 'DRIVING') {              // 부스터 속도선
     ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 2; ctx.beginPath();
     for (let i = 0; i < 16; i++) { const x = Math.random() * W, y = Math.random() * H, l = 40 + Math.random() * 70; ctx.moveTo(x, y); ctx.lineTo(x, y + l); }
     ctx.stroke();
   }
-  if (state === 'SPIN') { const [sx, sy] = w2s(car.X, car.Y); ctx.font = `${Math.max(22, px * 3)}px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('💫', sx, sy - 4.5 * px); }
   drawHUD();
+  ctx = wctx; W = sw; H = sh;
 }
 
 function outlined(text, x, y, size, color) {
