@@ -245,7 +245,7 @@ const $ = id => document.getElementById(id);
 
 /* ================= 설정 (밸런스는 여기만 고치면 돼요) ================= */
 const CFG = {
-  GATE_COUNT: 10, GATE_GAP: 300,          // 문제 10개, 300m마다 톨게이트
+  GATE_COUNT: 10,                         // 문제 10개 (톨게이트 위치는 아래 COURSE 구간 길이로 정해져요)
   ROAD_W: 40, CAR_HW: 2.0, ZONE_LEN: 45, PREVIEW: 220,
   MAX_V: 36, ACCEL: 20, DRAG: 7, BRAKE: 45, TURN: 1.7, LAUNCH_V: 16,
   BOUNCE_DEG: 18, BUMP_SLOW: 0.6,          // 벽 충돌: 중앙 쪽으로 18도 자동 정렬 + 속도 40% 감소
@@ -257,71 +257,117 @@ const CFG = {
     3: { name: '어려움', color: '#ff5a4f', tint: 'rgba(255,90,79,.30)',  mul: 2.3, dur: 4.5 }
   }
 };
-const FINISH_Y = CFG.GATE_GAP * (CFG.GATE_COUNT + 1);
 const LANE_W = CFG.ROAD_W / 3, HW = CFG.ROAD_W / 2, DIV = 0.8;
 const IS_TOUCH = window.matchMedia && matchMedia('(pointer:coarse)').matches;
 
-/* ================= 트랙 ================= */
+/* ================= 트랙 =================
+   도로는 '달린 거리 s(m)'에 따라 방향(각도)이 바뀌는 곡선이에요.
+   방향 0° = 출발 방향, +는 오른쪽으로 꺾임. U자(180°)·200° 커브도 그릴 수 있어요.
+   pts: [구간 안 위치(m), 방향(도)] 점들을 부드럽게 잇습니다. 톨게이트 앞뒤 45m는 항상 직선이에요. */
 const sm = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-/* 커브 모양: [구간 안 위치(m), 기울기] 점들을 부드럽게 잇습니다.
-   기울기 1 = 앞으로 1m 갈 때 옆으로 1m (45°). 톨게이트 앞뒤 45m는 항상 직선이에요. */
 const CURVES = {
-  gentle:  { name: '',                pts: [[45, 0], [110, 0.45], [175, -0.45], [235, 0]] },
-  s:       { name: '〰️ S자 커브 구간!  좌우로 부드럽게 꺾어요', pts: [[40, 0], [80, 0.75], [130, -0.75], [180, 0.75], [225, 0]] },
-  hairpin: { name: '⚠️ F1 헤어핀 급커브!  ↓ 브레이크로 속도를 줄여요', sharp: true, pts: [[45, 0], [57, 1.25], [100, 1.25], [116, -1.25], [160, -1.25], [172, 0]] },
-  chicane: { name: '⚠️ F1 시케인 급커브!  ↓ 브레이크로 속도를 줄여요', sharp: true, pts: [[50, 0], [60, 1.2], [84, 1.2], [96, -1.2], [120, -1.2], [130, 0]] }
+  gentle:  { len: 300, name: '', pts: [[45, 0], [110, 24], [175, -24], [235, 0]] },
+  s:       { len: 300, name: '〰️ S자 커브 구간!  좌우로 부드럽게 꺾어요', pts: [[40, 0], [80, 37], [130, -37], [180, 37], [225, 0]] },
+  hairpin: { len: 300, sharp: true, name: '⚠️ F1 헤어핀 급커브!  ↓ 브레이크로 속도를 줄여요', pts: [[45, 0], [80, 51], [105, 51], [172, -51], [197, -51], [232, 0]] },
+  chicane: { len: 300, sharp: true, name: '⚠️ F1 시케인 급커브!  ↓ 브레이크로 속도를 줄여요', pts: [[45, 0], [79, 50], [94, 50], [128, 0], [143, 0], [177, -50], [192, -50], [226, 0]] },
+  uturn:   { len: 450, sharp: true, big: true, name: '🔄 U자 커브 2연속!  ↓ 브레이크 밟고 크게 돌아요', pts: [[45, 0], [196, 180], [236, 180], [387, 0]] },
+  u200:    { len: 560, sharp: true, big: true, name: '🌀 200° 초대형 커브!  ↓ 브레이크로 속도를 줄여요', pts: [[45, 0], [75, -20], [95, -20], [305, 180], [345, 180], [496, 0]] }
 };
-// 300m 구간마다 커브 종류와 방향(1 오른쪽, -1 왼쪽). 순서를 바꾸면 코스가 바뀌어요.
+// 구간(톨게이트 사이)마다 커브 종류와 방향(1 오른쪽, -1 왼쪽). 순서를 바꾸면 코스가 바뀌어요.
 const COURSE = [
-  ['gentle', 1], ['s', 1], ['hairpin', 1], ['gentle', -1], ['s', -1], ['chicane', 1],
-  ['hairpin', -1], ['s', 1], ['gentle', 1], ['s', -1], ['hairpin', 1]
+  ['gentle', 1], ['s', 1], ['uturn', 1], ['gentle', -1], ['s', -1], ['chicane', 1],
+  ['u200', -1], ['s', 1], ['gentle', 1], ['s', -1], ['hairpin', 1]
 ];
-function rawSlope(Y) {
-  const k = Math.floor(Y / CFG.GATE_GAP), seg = COURSE[k]; if (Y < 0 || !seg) return 0;
-  const u = Y - k * CFG.GATE_GAP, pts = CURVES[seg[0]].pts;
+const SEG_S = [0];                                   // 각 구간 시작 거리. GATE_S[i] = i번째 톨게이트 위치
+COURSE.forEach(([k]) => SEG_S.push(SEG_S[SEG_S.length - 1] + CURVES[k].len));
+const GATE_S = SEG_S.slice(0, CFG.GATE_COUNT + 1), FINISH_S = SEG_S[COURSE.length];
+// 톨게이트 색깔 길 미리보기 시작 위치 (U자 커브 위에는 칠하지 않고 마지막 직선에서만)
+const TINT_FROM = GATE_S.map((g, i) => {
+  if (i < 1) return g; const C = CURVES[COURSE[i - 1][0]];
+  return g - (C.big ? C.len - C.pts[C.pts.length - 1][0] : CFG.PREVIEW);
+});
+function segOf(s) { let k = 0; while (k < COURSE.length - 1 && s >= SEG_S[k + 1]) k++; return k; }
+function headingDeg(s) {
+  if (s <= 0 || s >= FINISH_S) return 0;
+  const k = segOf(s), [kind, dir] = COURSE[k], pts = CURVES[kind].pts, u = s - SEG_S[k];
   if (u <= pts[0][0] || u >= pts[pts.length - 1][0]) return 0;
   for (let i = 0; i < pts.length - 1; i++) {
-    const [u0, s0] = pts[i], [u1, s1] = pts[i + 1];
-    if (u < u1) return seg[1] * (s0 + (s1 - s0) * sm((u - u0) / (u1 - u0)));
+    const [u0, a0] = pts[i], [u1, a1] = pts[i + 1];
+    if (u < u1) return dir * (a0 + (a1 - a0) * sm((u - u0) / (u1 - u0)));
   }
   return 0;
 }
-// 중심선은 한 번만 계산해 두고(0.5m 간격) 읽기만 해요 → 매 프레임 계산 부담 없음
-const LUT_Y0 = -400, LUT_D = 0.5, LUT = new Float32Array(Math.ceil((CFG.GATE_GAP * (CFG.GATE_COUNT + 1) + 1000) / LUT_D));
-for (let i = 1, c = 0; i < LUT.length; i++) {
-  const y = LUT_Y0 + i * LUT_D; c += (rawSlope(y - LUT_D) + rawSlope(y)) / 2 * LUT_D; LUT[i] = c;
+// 중심선은 처음에 한 번만 계산해 두고(0.5m 간격) 읽기만 해요 → 매 프레임 계산 부담 없음
+const LUT_S0 = -300, LUT_D = 0.5, LUT_N = Math.ceil((FINISH_S + 700) / LUT_D);
+const PX = new Float64Array(LUT_N), PY = new Float64Array(LUT_N), PT = new Float64Array(LUT_N);
+for (let i = 0, x = 0, y = LUT_S0; i < LUT_N; i++) {
+  const s = LUT_S0 + i * LUT_D, t = headingDeg(s) * Math.PI / 180;
+  if (i > 0) { const tm = (PT[i - 1] + t) / 2; x += Math.sin(tm) * LUT_D; y += Math.cos(tm) * LUT_D; }
+  PX[i] = x; PY[i] = y; PT[i] = t;
 }
-function center(Y) {                       // 도로 중심선
-  const f = clamp((Y - LUT_Y0) / LUT_D, 0, LUT.length - 1.001), i = Math.floor(f);
-  return LUT[i] + (LUT[i + 1] - LUT[i]) * (f - i);
+function lut(A, s) {
+  const f = clamp((s - LUT_S0) / LUT_D, 0, LUT_N - 1.0001), i = Math.floor(f);
+  return A[i] + (A[i + 1] - A[i]) * (f - i);
 }
-const slope = Y => (center(Y + 1) - center(Y - 1)) / 2;
-// 급커브 꺾이는 지점 (안내 표지판용)
+const pX = s => lut(PX, s), pY = s => lut(PY, s), pT = s => lut(PT, s);
+const curv = s => (pT(s + 1) - pT(s - 1)) / 2;       // 곡률(1/반지름), +면 오른쪽으로 도는 중
+function project(x, y, s0) {                         // 차 위치 → 도로 위 진행 거리 s (s0 근처만 찾아요)
+  let best = s0, bd = Infinity;
+  for (let s = s0 - 20; s <= s0 + 20; s += 1) { const d = (x - pX(s)) ** 2 + (y - pY(s)) ** 2; if (d < bd) { bd = d; best = s; } }
+  for (let s = best - 1; s <= best + 1; s += 0.1) { const d = (x - pX(s)) ** 2 + (y - pY(s)) ** 2; if (d < bd) { bd = d; best = s; } }
+  return clamp(best, LUT_S0 + 1, FINISH_S + 600);
+}
+function lateral(x, y, s) { const t = pT(s); return (x - pX(s)) * Math.cos(t) - (y - pY(s)) * Math.sin(t); }
+function placeOnPath(o, s, d) { const t = pT(s); o.X = pX(s) + Math.cos(t) * d; o.Y = pY(s) - Math.sin(t) * d; }
+
+// 도로 전체를 20m 칸으로 나눠 기록 → "이 점에서 도로까지 가장 가까운 거리" 빠르게 계산(배경 배치용)
+const PGRID = new Map(), CELL = 20;
+for (let s = LUT_S0; s <= FINISH_S + 600; s += 2) {
+  const key = Math.floor(pX(s) / CELL) + ',' + Math.floor(pY(s) / CELL);
+  if (!PGRID.has(key)) PGRID.set(key, []); PGRID.get(key).push(s);
+}
+let nearS = 0;                                        // pathDist가 찾은 가장 가까운 도로 지점
+function pathDist(x, y, r) {
+  const n = Math.ceil(r / CELL) + 1, cx = Math.floor(x / CELL), cy = Math.floor(y / CELL); let bd = Infinity;
+  for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) {
+    const L = PGRID.get((cx + i) + ',' + (cy + j)); if (!L) continue;
+    for (const s of L) { const d = Math.hypot(x - pX(s), y - pY(s)); if (d < bd) { bd = d; nearS = s; } }
+  }
+  return bd;
+}
+function farFromRoad(x, y, need, env) {               // 도로와 충분히 떨어져 있고, 가장 가까운 도로가 같은 배경 구간인지
+  if (pathDist(x, y, need + 2) < need) return false;
+  pathDist(x, y, 140); return envAt(nearS) === env;
+}
+
+// 급커브 바깥쪽 화살표 표지판 위치
 const CORNERS = [];
 COURSE.forEach(([kind, dir], k) => {
   const C = CURVES[kind]; if (!C.sharp) return;
   for (let i = 0; i < C.pts.length - 1; i++) {
-    const d = (C.pts[i + 1][1] - C.pts[i][1]) * dir;
-    if (Math.abs(d) >= 1) CORNERS.push({ Y: k * CFG.GATE_GAP + (C.pts[i][0] + C.pts[i + 1][0]) / 2, turn: Math.sign(d) });
+    const [u0, a0] = C.pts[i], [u1, a1] = C.pts[i + 1], d = (a1 - a0) * dir;
+    if (Math.abs(d) < 45) continue;
+    const n = Math.max(3, Math.round((u1 - u0) / 12));
+    for (let j = 0; j < n; j++) CORNERS.push({ s: SEG_S[k] + u0 + (u1 - u0) * (j + 0.5) / n, turn: Math.sign(d) });
   }
 });
-function curveAhead(Y) {                   // 곧 나올 커브 안내 문구
-  const k = Math.floor((Y + 80) / CFG.GATE_GAP), seg = COURSE[k]; if (!seg) return '';
-  const C = CURVES[seg[0]], s0 = k * CFG.GATE_GAP + C.pts[0][0];
-  return (C.name && Y > s0 - 80 && Y < s0 + 25) ? C.name : '';
+function curveAhead(s) {                             // 곧 나올 커브 안내 문구
+  const k = segOf(s + 80); if (s + 80 >= FINISH_S) return '';
+  const C = CURVES[COURSE[k][0]], s0 = SEG_S[k] + C.pts[0][0];
+  return (C.name && s > s0 - 80 && s < s0 + 25) ? C.name : '';
 }
 
 /* ================= 도시 환경 (구간별 배경) =================
-   구간 경계는 모두 30m의 배수라서 건물·나무가 경계에 걸치지 않아요. */
-const ZONES = [
-  { s: 0,    e: 450,  t: 'city'  }, { s: 450,  e: 1050, t: 'park'  }, { s: 1050, e: 1350, t: 'water' },
-  { s: 1350, e: 1950, t: 'city'  }, { s: 1950, e: 2550, t: 'park'  }, { s: 2550, e: 3150, t: 'water' },
-  { s: 3150, e: 1e9,  t: 'city'  }
-];
+   [구간 번호(소수 가능), 배경] — 2.5는 3번째 구간의 가운데예요. */
+const ZONE_DEF = [[0, 'city'], [1.5, 'park'], [3.5, 'water'], [4.5, 'city'], [7, 'park'], [8.5, 'water'], [10.5, 'city']];
+const ZONES = ZONE_DEF.map(([f, t], i) => {
+  const at = g => { const k = Math.min(Math.floor(g), COURSE.length - 1); return SEG_S[k] + (g - k) * CURVES[COURSE[k][0]].len; };
+  return { s: i ? at(f) : -1e9, e: i < ZONE_DEF.length - 1 ? at(ZONE_DEF[i + 1][0]) : 1e9, t };
+});
 const ZONE_NAME = { city: '🏙️ 도심 거리', park: '🌳 시민공원 옆 도로', water: '🌉 강 위의 다리' };
-function envAt(Y) { for (const z of ZONES) if (Y >= z.s && Y < z.e) return z.t; return 'city'; }
-function nearQuay(Y) { for (const z of ZONES) if (z.t === 'water' && (Math.abs(Y - z.s) < 4 || Math.abs(Y - z.e) < 4)) return true; return false; }
+function envAt(s) { for (const z of ZONES) if (s >= z.s && s < z.e) return z.t; return 'city'; }
+function nearQuay(s) { for (const z of ZONES) if (z.t === 'water' && (Math.abs(s - z.s) < 4 || Math.abs(s - z.e) < 4)) return true; return false; }
 const GROUND = { city: ['#9c9b96', '#a4a39e'], park: ['#5db85f', '#54ad58'], water: ['#3f97d8', '#398dcf'] };
 const ROOFS = ['#c9c3b8', '#a7b4c2', '#d8b4a6', '#9fb8a8', '#bfae9c', '#8fa0b8', '#c7a58f', '#b5bfa5'];
 const TREES = ['#2f8f46', '#3aa655', '#2a7d3e', '#4fb264'];
@@ -334,14 +380,14 @@ const hash = (a, b, c) => {                // 같은 위치에서는 항상 같�
 
 /* ================= 상태 ================= */
 let state = 'MENU', student = null, maxStudents = 24;
-let car, boost, nextGate, results, usedQ, laneLock, problem;
+let car, boost, nextGate, results, usedQ, laneLock, problem, camA = 0;
 let quizLocked, answerStr, quizStart, raceStart, raceTime, spinT, cdT, goT, shakeT, zoom, sent, lastPost;
-let bannerTimer = null, menuY = 40, envNow = '', toastT = 0;
+let bannerTimer = null, menuS = 40, envNow = '', toastT = 0;
 const keys = { left: false, right: false, up: false, down: false };
 const touch = { left: false, right: false, up: false, down: false };
 
 function resetRace() {
-  car = { X: 0, Y: 0, phi: 0, v: 0, spin: 0, vm: 0 };
+  car = { X: 0, Y: 0, phi: 0, v: 0, spin: 0, vm: 0, s: 0, d: 0 }; camA = 0;
   boost = { mul: 1, t: 0 }; nextGate = 1; results = []; usedQ = new Set(); laneLock = {};
   quizLocked = false; answerStr = ''; raceStart = null; raceTime = 0; shakeT = 0; zoom = 1; sent = false; spinT = 0; goT = 0; lastPost = null; envNow = ''; toastT = 0;
 }
@@ -431,9 +477,9 @@ function showBanner(text, cls, ms) {
 }
 
 function laneOf(rel) { return clamp(Math.floor((rel + HW) / LANE_W), 0, 2); }
-function zoneGate(Y) {
-  const i = Math.ceil(Y / CFG.GATE_GAP);
-  return (i >= 1 && i <= CFG.GATE_COUNT && Y >= i * CFG.GATE_GAP - CFG.ZONE_LEN) ? i : -1;
+function zoneGate(s) {                               // 칸막이 구간 안이면 톨게이트 번호
+  for (let i = 1; i <= CFG.GATE_COUNT; i++) if (s < GATE_S[i]) return s >= GATE_S[i] - CFG.ZONE_LEN ? i : -1;
+  return -1;
 }
 
 function updateDriving(dt) {
@@ -442,38 +488,44 @@ function updateDriving(dt) {
   car.v += (gas ? CFG.ACCEL : -CFG.DRAG) * dt;
   if (brake) car.v -= CFG.BRAKE * dt;
   car.v = clamp(car.v, 0, CFG.MAX_V);
-  car.phi = clamp(car.phi + steer * CFG.TURN * Math.min(1, 0.35 + car.v / 14) * dt, -1.3, 1.3);
+  car.phi += steer * CFG.TURN * Math.min(1, 0.35 + car.v / 14) * dt;
+  { const t = pT(car.s); car.phi = t + clamp(car.phi - t, -1.3, 1.3); }   // 도로 방향 기준 ±75°까지만
 
   if (boost.t > 0) { boost.t -= dt; if (boost.t <= 0) { boost.t = 0; boost.mul = 1; } }
   car.vm = car.v * (boost.t > 0 ? boost.mul : 1);
   car.X += Math.sin(car.phi) * car.vm * dt;
   car.Y += Math.cos(car.phi) * car.vm * dt;
 
-  // 벽/톨게이트 칸막이 충돌 (스마트 스티어링: 탄성 반발 + 중앙 쪽 자동 정렬)
-  const c = center(car.Y);
-  let lo = c - HW + CFG.CAR_HW, hi = c + HW - CFG.CAR_HW;
-  const zg = zoneGate(car.Y);
+  // 도로 위 위치: 진행 거리 s, 중심선에서 오른쪽(+)/왼쪽(-) 거리 d
+  car.s = project(car.X, car.Y, car.s);
+  let d = lateral(car.X, car.Y, car.s);
+
+  // 벽/톨게이트 칸막이 충돌 (스마트 스티어링: 탄성 반발 + 도로 방향으로 자동 정렬)
+  let lo = -HW + CFG.CAR_HW, hi = HW - CFG.CAR_HW;
+  const zg = zoneGate(car.s);
   if (zg > 0) {
-    if (laneLock[zg] === undefined) laneLock[zg] = laneOf(car.X - c);
-    const L = laneLock[zg], e0 = c - HW + L * LANE_W, e1 = e0 + LANE_W;
+    if (laneLock[zg] === undefined) laneLock[zg] = laneOf(d);
+    const L = laneLock[zg], e0 = -HW + L * LANE_W, e1 = e0 + LANE_W;
     lo = e0 + (L > 0 ? DIV : 0) + CFG.CAR_HW; hi = e1 - (L < 2 ? DIV : 0) - CFG.CAR_HW;
   }
-  const alpha = Math.atan(slope(car.Y)), bounce = CFG.BOUNCE_DEG * Math.PI / 180;
-  if (car.X < lo) { car.X = lo + 0.05; car.phi = alpha + bounce; car.v *= CFG.BUMP_SLOW; shakeT = 0.25; sfx.bump(); }
-  else if (car.X > hi) { car.X = hi - 0.05; car.phi = alpha - bounce; car.v *= CFG.BUMP_SLOW; shakeT = 0.25; sfx.bump(); }
+  const alpha = pT(car.s), bounce = CFG.BOUNCE_DEG * Math.PI / 180;
+  if (d < lo) { d = lo + 0.05; car.phi = alpha + bounce; car.v *= CFG.BUMP_SLOW; shakeT = 0.25; sfx.bump(); placeOnPath(car, car.s, d); }
+  else if (d > hi) { d = hi - 0.05; car.phi = alpha - bounce; car.v *= CFG.BUMP_SLOW; shakeT = 0.25; sfx.bump(); placeOnPath(car, car.s, d); }
+  car.d = d;
 
-  const eNow = envAt(car.Y); if (eNow !== envNow) { envNow = eNow; toastT = 2.6; }
-  if (nextGate <= CFG.GATE_COUNT && car.Y >= nextGate * CFG.GATE_GAP) startQuiz();
-  else if (car.Y >= FINISH_Y) finish();
+  const eNow = envAt(car.s); if (eNow !== envNow) { envNow = eNow; toastT = 2.6; }
+  if (nextGate <= CFG.GATE_COUNT && car.s >= GATE_S[nextGate]) startQuiz();
+  else if (car.s >= FINISH_S) finish();
 }
 
 /* ---------- 문제 ---------- */
 function startQuiz() {
-  const g = nextGate, lv = laneLock[g] !== undefined ? laneLock[g] + 1 : laneOf(car.X - center(car.Y)) + 1;
+  const g = nextGate, lv = laneLock[g] !== undefined ? laneLock[g] + 1 : laneOf(car.d) + 1;
   let p;
   for (let i = 0; i < 30; i++) { p = genProblem(lv); if (!usedQ.has(p.q)) break; }
   usedQ.add(p.q); problem = p;
-  car.v = 0; car.vm = 0; car.Y = Math.max(car.Y, g * CFG.GATE_GAP);
+  car.v = 0; car.vm = 0;
+  if (car.s < GATE_S[g]) { car.s = GATE_S[g]; placeOnPath(car, car.s, car.d); }
   quizLocked = false; answerStr = ''; quizStart = performance.now();
   setState('QUIZ');
   const L = CFG.LEVELS[lv];
@@ -500,7 +552,7 @@ function submit() {
   results.push({ lv: problem.lv, type: problem.type, q: problem.q + (problem.note ? ' (' + problem.note + ')' : ''),
     ans: problem.ans, given: answerStr, ok, ms: Math.round(performance.now() - quizStart), explain: problem.explain });
   nextGate++;
-  const alpha = Math.atan(slope(car.Y));
+  const alpha = pT(car.s);
   if (ok) {
     boost = { mul: L.mul, t: L.dur };
     showBanner(`⭕ 정답!  ${L.name} 부스터 ×${L.mul} (${L.dur}초)`, 'ok', CFG.RIGHT_BANNER_MS);
@@ -618,125 +670,177 @@ function rr(x, y, w, h, r) {
 }
 const FONT = "'Pretendard','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif";
 
-/* ---------- 도시 풍경 (건물 · 공원 · 강) ---------- */
-const cam = { cx: 0, px: 7.5, Yc: 0, sy: 0 };
-const tx = x => W / 2 + (x - cam.cx) * cam.px, ty = y => cam.sy - (y - cam.Yc) * cam.px;
-function building(xw, yw, w, l, sd, sd2, sd3) {
-  const p = cam.px, x = tx(xw), y = ty(yw + l), pw = w * p, ph = l * p, hg = 1 + sd * 3;
-  if (x > W + 60 || x + pw < -60 || y > H + 60 || y + ph < -60) return;
-  ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.fillRect(x + hg * 1.2 * p, y + hg * 0.9 * p, pw, ph);
-  ctx.fillStyle = ROOFS[Math.floor(sd2 * ROOFS.length)]; ctx.fillRect(x, y, pw, ph);
-  ctx.fillStyle = 'rgba(255,255,255,.16)'; ctx.fillRect(x + p, y + p, pw - 2 * p, ph - 2 * p);
-  ctx.fillStyle = 'rgba(0,0,0,.26)';
-  ctx.fillRect(x + pw * (0.15 + 0.3 * sd3), y + ph * 0.2, p * 3, p * 2.2);
-  ctx.fillRect(x + pw * 0.55, y + ph * (0.5 + 0.25 * sd2), p * 2.4, p * 2.4);
-  ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = Math.max(1, p * 0.3); ctx.strokeRect(x, y, pw, ph);
+/* ---------- 도시 풍경 (건물 · 공원 · 강) ----------
+   배경 물건은 시작할 때 한 번만 배치해 두고 매 프레임 그리기만 해요.
+   U자 커브처럼 도로가 나란히 지나가는 곳에서도 다른 도로 위에 놓이지 않게 거리 검사를 해요. */
+const SCN = [], LAYER = { pond: 0, flower: 0, rip: 0, bld: 1, boat: 2, tree: 3, lamp: 4, chev: 5 };
+function addAt(s, off, o, need) {
+  const t = pT(s), x = pX(s) + Math.cos(t) * off, y = pY(s) - Math.sin(t) * off;
+  if (!farFromRoad(x, y, need, envAt(s))) return;
+  o.x = x; o.y = y; o.t = t; SCN.push(o);
 }
-function tree(xw, yw, r, sd) {
-  const p = cam.px, x = tx(xw), y = ty(yw), R = r * p;
-  if (x > W + R + 20 || x < -R - 20 || y > H + R + 20 || y < -R - 20) return;
-  ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.beginPath(); ctx.arc(x + R * .3, y + R * .3, R, 0, 6.283); ctx.fill();
-  ctx.fillStyle = TREES[Math.floor(sd * TREES.length)]; ctx.beginPath(); ctx.arc(x, y, R, 0, 6.283); ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.beginPath(); ctx.arc(x - R * .25, y - R * .25, R * .55, 0, 6.283); ctx.fill();
+const BLDS = [];
+function rectPts(o, m) {                               // 기울어진 직사각형의 네 꼭짓점 (m: 여유)
+  const nx = Math.cos(o.t), ny = -Math.sin(o.t), fx = Math.sin(o.t), fy = Math.cos(o.t), w = o.w / 2 + m, l = o.l / 2 + m;
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([i, j]) => [o.x + nx * w * i + fx * l * j, o.y + ny * w * i + fy * l * j]);
 }
-function lamp(xw, yw) {
-  const p = cam.px, x = tx(xw), y = ty(yw);
-  ctx.fillStyle = 'rgba(255,236,160,.25)'; ctx.beginPath(); ctx.arc(x, y, p * 2.2, 0, 6.283); ctx.fill();
-  ctx.fillStyle = '#fff3b0'; ctx.beginPath(); ctx.arc(x, y, Math.max(2, p * 0.7), 0, 6.283); ctx.fill();
+function rectsOverlap(A, B) {                          // 분리축 검사: 굽은 길 바깥쪽에서 건물끼리 겹치지 않게
+  for (const P of [A, B]) for (let i = 0; i < 4; i++) {
+    const ax = P[(i + 1) % 4][1] - P[i][1], ay = P[i][0] - P[(i + 1) % 4][0];
+    const pa = A.map(p => p[0] * ax + p[1] * ay), pb = B.map(p => p[0] * ax + p[1] * ay);
+    if (Math.max(...pa) < Math.min(...pb) || Math.max(...pb) < Math.min(...pa)) return false;
+  }
+  return true;
 }
-function cRange(y0, y1) {                 // y0~y1 사이 도로 중심선의 가장 왼쪽/오른쪽 (급커브에서 건물이 도로를 덮지 않게)
-  let a = center(y0), b = a;
-  for (let y = y0 + 2; y <= y1 + 2; y += 2) { const c = center(Math.min(y, y1)); if (c < a) a = c; if (c > b) b = c; }
-  return [a, b];
+function addBuilding(s, lat, w, l, a, b, c) {
+  const t = pT(s), o = { k: 'bld', x: pX(s) + Math.cos(t) * lat, y: pY(s) - Math.sin(t) * lat, t, w, l, a, b, c };
+  const pts = rectPts(o, 0);
+  for (const [x, y] of pts.concat([[o.x, o.y]])) if (!farFromRoad(x, y, HW + 9, 'city')) return;
+  const big = rectPts(o, 0.8);
+  for (const B of BLDS) if (Math.abs(B.o.x - o.x) < 40 && Math.abs(B.o.y - o.y) < 40 && rectsOverlap(big, B.p)) return;
+  BLDS.push({ o, p: big }); SCN.push(o);
 }
-function chevron(xw, yw, turn) {           // 급커브 화살표 표지판
-  const p = cam.px, x = tx(xw), y = ty(yw), w = 3.6 * p, h = 2.4 * p;
-  if (x > W + w || x < -w || y > H + h || y < -h) return;
-  ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(x - w / 2 + p * .4, y - h / 2 + p * .4, w, h);
-  ctx.fillStyle = '#ffd400'; ctx.fillRect(x - w / 2, y - h / 2, w, h);
-  ctx.strokeStyle = '#15191f'; ctx.lineWidth = Math.max(2, p * .45); ctx.lineJoin = 'miter'; ctx.beginPath();
-  for (const o of [-0.7, 0.5]) { const ax = x + (o * turn) * p; ctx.moveTo(ax - .5 * turn * p, y - .8 * p); ctx.lineTo(ax + .5 * turn * p, y); ctx.lineTo(ax - .5 * turn * p, y + .8 * p); }
-  ctx.stroke();
-}
-function drawScenery(Ys, Ye) {
-  const LOT = 30, p = cam.px;
-  for (let n = Math.floor(Ys / LOT) - 1; n <= Math.ceil(Ye / LOT); n++) {
-    const Yl = n * LOT, env = envAt(Yl + 15), cl = center(Yl + 15);
-    for (const s of [-1, 1]) {
-      if (env === 'city') {
-        for (let r = 0; r < 3; r++) {                                   // 건물 3줄
-          const k = s * 7 + r;
-          if (hash(n, k, 1) < 0.1) continue;
-          const w = 10 + hash(n, k, 2) * 17, l = 19 + hash(n, k, 3) * 7, yw = Yl + 2 + hash(n, k, 4) * (26 - l), off = 36 + r * 34;
-          const [ca, cb] = cRange(yw - 3, yw + l + 3);
-          building(s < 0 ? ca - off - w : cb + off, yw, w, l, hash(n, k, 5), hash(n, k, 6), hash(n, k, 7));
-        }
-      } else if (env === 'park') {
-        for (let m = 0; m < 3; m++) {                                   // 울타리 관목 + 나무
-          const Ym = Yl + m * 10;
-          for (const hy of [2.5, 7.5]) { const cy = center(Ym + hy); tree(cy + s * (HW + 4.2), Ym + hy, 1.3, 0.1); }
-          for (let t = 0; t < 2; t++) {
-            const kk = m * 5 + t * 13 + s * 3, y = Ym + hash(n, kk, 22) * 10, R = 2.4 + hash(n, kk, 23) * 2.8, cr = cRange(y - R, y + R);
-            tree((s < 0 ? cr[0] : cr[1]) + s * (26 + hash(n, kk, 21) * 95), y, R, hash(n, kk, 24));
-          }
-        }
-        if (hash(n, s, 30) < 0.55) {                                    // 화단
-          const y = Yl + 8 + hash(n, s, 32) * 14, cr = cRange(y - 3, y + 3), xc = (s < 0 ? cr[0] : cr[1]) + s * (HW + 20), ex = tx(xc), ey = ty(y);
-          ctx.fillStyle = '#3f9a4a'; ctx.beginPath(); ctx.ellipse(ex, ey, p * 4, p * 2.4, 0, 0, 6.283); ctx.fill();
-          for (let d = 0; d < 9; d++) {
-            ctx.fillStyle = FLOWERS[Math.floor(hash(n, s * 10 + d, 33) * FLOWERS.length)];
-            ctx.beginPath(); ctx.arc(ex + (hash(n, s * 10 + d, 34) - .5) * p * 6.4, ey + (hash(n, s * 10 + d, 35) - .5) * p * 3.6, Math.max(1.5, p * .5), 0, 6.283); ctx.fill();
-          }
-        }
-        if (hash(n, s, 31) < 0.3) {                                     // 연못
-          const y = Yl + 15, cr = cRange(y - 9, y + 9), ex = tx((s < 0 ? cr[0] : cr[1]) + s * (55 + hash(n, s, 36) * 20)), ey = ty(y), rx = p * (7 + hash(n, s, 37) * 4), ry = p * (5 + hash(n, s, 38) * 3);
-          ctx.fillStyle = '#d9d2b8'; ctx.beginPath(); ctx.ellipse(ex, ey, rx + p, ry + p, 0, 0, 6.283); ctx.fill();
-          ctx.fillStyle = '#4aa3e0'; ctx.beginPath(); ctx.ellipse(ex, ey, rx, ry, 0, 0, 6.283); ctx.fill();
-          ctx.fillStyle = 'rgba(255,255,255,.3)'; ctx.beginPath(); ctx.ellipse(ex - rx * .25, ey - ry * .3, rx * .35, ry * .2, 0, 0, 6.283); ctx.fill();
-        }
-      } else {                                                          // 강: 잔물결 + 배
-        ctx.strokeStyle = 'rgba(255,255,255,.4)'; ctx.lineWidth = Math.max(1, p * .22);
-        for (let m = 0; m < 3; m++) for (let t = 0; t < 2; t++) {
-          const kk = m * 4 + t + s * 20, y = Yl + m * 10 + hash(n, kk, 41) * 10;
-          const x = tx(center(y) + s * (HW + 9 + hash(n, kk, 42) * 90)), yy = ty(y), rr0 = p * (1.6 + hash(n, kk, 43) * 2);
-          ctx.beginPath(); ctx.arc(x, yy, rr0, 0.3, 2.5); ctx.stroke();
-        }
-        if (hash(n, s, 44) < 0.25) {
-          const y = Yl + 15, cr = cRange(y - 7, y + 7), bx = tx((s < 0 ? cr[0] : cr[1]) + s * (30 + hash(n, s, 45) * 40)), by = ty(y);
-          ctx.save(); ctx.translate(bx, by); ctx.rotate((hash(n, s, 46) - .5) * 0.5);
-          ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(-p * .6, p * 4.5, p * 1.2, p * 7);
-          ctx.fillStyle = '#f1f4f8'; ctx.beginPath(); ctx.moveTo(0, -p * 5); ctx.quadraticCurveTo(p * 2, -p * 2, p * 1.7, p * 4.5); ctx.lineTo(-p * 1.7, p * 4.5); ctx.quadraticCurveTo(-p * 2, -p * 2, 0, -p * 5); ctx.fill();
-          ctx.fillStyle = '#5a6b82'; ctx.fillRect(-p * 1, -p * 1.5, p * 2, p * 3);
-          ctx.restore();
-        }
-        for (const hy of [7.5, 22.5]) lamp(center(Yl + hy) + s * (HW + 3.3), Yl + hy);   // 다리 가로등
+for (let n = -6, LOT = 30; n * LOT < FINISH_S + 400; n++) {
+  const sl = n * LOT, env = envAt(sl + 15);
+  for (const s of [-1, 1]) {
+    if (env === 'city') {
+      for (let r = 0; r < 3; r++) {                                       // 건물 3줄
+        const k = s * 7 + r; if (hash(n, k, 1) < 0.1) continue;
+        const w = 10 + hash(n, k, 2) * 17, l = 19 + hash(n, k, 3) * 7, sb = sl + 2 + hash(n, k, 4) * (26 - l), off = 36 + r * 34;
+        addBuilding(sb + l / 2, s * (off + w / 2), w, l, hash(n, k, 5), hash(n, k, 6), hash(n, k, 7));
       }
-    }
-    if (env === 'city') for (const k of [0, 15]) {                      // 가로수 + 가로등
-      const Yt = Yl + k, ct = center(Yt);
-      for (const s of [-1, 1]) tree(ct + s * (HW + 5.5), Yt, 1.8, hash(n, k + s, 9));
-      for (const s of [-1, 1]) lamp(center(Yt + 7.5) + s * (HW + 3.6), Yt + 7.5);
+      for (const k of [0, 15]) {                                          // 가로수 + 가로등
+        addAt(sl + k, s * (HW + 5.5), { k: 'tree', r: 1.8, c: hash(n, k + s, 9) }, HW + 4.5);
+        addAt(sl + k + 7.5, s * (HW + 3.6), { k: 'lamp' }, HW + 3);
+      }
+    } else if (env === 'park') {
+      for (let m = 0; m < 3; m++) {                                       // 울타리 관목 + 나무
+        for (const hy of [2.5, 7.5]) addAt(sl + m * 10 + hy, s * (HW + 4.2), { k: 'tree', r: 1.3, c: 0.1 }, HW + 3.5);
+        for (let t = 0; t < 2; t++) {
+          const kk = m * 5 + t * 13 + s * 3, R = 2.4 + hash(n, kk, 23) * 2.8, off = 26 + hash(n, kk, 21) * 95;
+          addAt(sl + m * 10 + hash(n, kk, 22) * 10, s * off, { k: 'tree', r: R, c: hash(n, kk, 24) }, Math.min(off - 0.5, HW + 12 + R));
+        }
+      }
+      if (hash(n, s, 30) < 0.55) addAt(sl + 8 + hash(n, s, 32) * 14, s * (HW + 20), { k: 'flower', n, s }, HW + 16);   // 화단
+      if (hash(n, s, 31) < 0.3) {                                         // 연못
+        const rx = 7 + hash(n, s, 37) * 4, ry = 5 + hash(n, s, 38) * 3;
+        addAt(sl + 15, s * (55 + hash(n, s, 36) * 20), { k: 'pond', rx, ry }, HW + 13 + rx);
+      }
+    } else {                                                              // 강: 잔물결 + 배 + 다리 가로등
+      for (let m = 0; m < 3; m++) for (let t = 0; t < 2; t++) {
+        const kk = m * 4 + t + s * 20, off = HW + 9 + hash(n, kk, 42) * 90;
+        addAt(sl + m * 10 + hash(n, kk, 41) * 10, s * off, { k: 'rip', r: 1.6 + hash(n, kk, 43) * 2 }, Math.min(off - 0.5, HW + 6));
+      }
+      if (hash(n, s, 44) < 0.25) addAt(sl + 15, s * (30 + hash(n, s, 45) * 40), { k: 'boat', rot: (hash(n, s, 46) - .5) * 0.5 }, HW + 10);
+      for (const hy of [7.5, 22.5]) addAt(sl + hy, s * (HW + 3.3), { k: 'lamp' }, HW + 3);
     }
   }
-  for (const c of CORNERS) if (c.Y > Ys - 20 && c.Y < Ye + 20)            // 급커브 바깥쪽 화살표 표지판
-    for (const dy of [-8, -2, 4]) { const y = c.Y + dy; chevron(center(y) - c.turn * (HW + 6), y, c.turn); }
+}
+for (const c of CORNERS) addAt(c.s, -c.turn * (HW + 6), { k: 'chev', turn: c.turn }, HW + 5);   // 급커브 화살표 표지판
+SCN.sort((a, b) => LAYER[a.k] - LAYER[b.k]);
+
+// 이 아래 그리기 함수들은 모두 '세상 좌표(m)'로 그려요. 화면 회전·확대는 render()에서 한 번에 적용돼요.
+function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill(); }
+function frameAt(x, y, ang) { ctx.save(); ctx.translate(x, y); ctx.rotate(-ang); ctx.scale(1, -1); }   // 이 안에서는 -y가 앞쪽
+function drawObj(o) {
+  if (o.k === 'tree') {
+    const R = o.r; ctx.fillStyle = 'rgba(0,0,0,.2)'; circle(o.x + R * .3, o.y - R * .3, R);
+    ctx.fillStyle = TREES[Math.floor(o.c * TREES.length)]; circle(o.x, o.y, R);
+    ctx.fillStyle = 'rgba(255,255,255,.14)'; circle(o.x - R * .25, o.y + R * .25, R * .55);
+  } else if (o.k === 'lamp') {
+    ctx.fillStyle = 'rgba(255,236,160,.25)'; circle(o.x, o.y, 2.2);
+    ctx.fillStyle = '#fff3b0'; circle(o.x, o.y, 0.7);
+  } else if (o.k === 'bld') {
+    frameAt(o.x, o.y, o.t);
+    const w = o.w, l = o.l, x = -w / 2, y = -l / 2, hg = 1 + o.a * 3;
+    ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.fillRect(x + hg * 1.2, y + hg * 0.9, w, l);
+    ctx.fillStyle = ROOFS[Math.floor(o.b * ROOFS.length)]; ctx.fillRect(x, y, w, l);
+    ctx.fillStyle = 'rgba(255,255,255,.16)'; ctx.fillRect(x + 1, y + 1, w - 2, l - 2);
+    ctx.fillStyle = 'rgba(0,0,0,.26)';
+    ctx.fillRect(x + w * (0.15 + 0.3 * o.c), y + l * 0.2, 3, 2.2);
+    ctx.fillRect(x + w * 0.55, y + l * (0.5 + 0.25 * o.b), 2.4, 2.4);
+    ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 0.3; ctx.strokeRect(x, y, w, l);
+    ctx.restore();
+  } else if (o.k === 'pond') {
+    ctx.fillStyle = '#d9d2b8'; ctx.beginPath(); ctx.ellipse(o.x, o.y, o.rx + 1, o.ry + 1, -o.t, 0, 6.283); ctx.fill();
+    ctx.fillStyle = '#4aa3e0'; ctx.beginPath(); ctx.ellipse(o.x, o.y, o.rx, o.ry, -o.t, 0, 6.283); ctx.fill();
+    frameAt(o.x, o.y, o.t);
+    ctx.fillStyle = 'rgba(255,255,255,.3)'; ctx.beginPath(); ctx.ellipse(-o.rx * .25, -o.ry * .3, o.rx * .35, o.ry * .2, 0, 0, 6.283); ctx.fill();
+    ctx.restore();
+  } else if (o.k === 'flower') {
+    frameAt(o.x, o.y, o.t);
+    ctx.fillStyle = '#3f9a4a'; ctx.beginPath(); ctx.ellipse(0, 0, 4, 2.4, 0, 0, 6.283); ctx.fill();
+    for (let d = 0; d < 9; d++) {
+      const k = o.s * 10 + d; ctx.fillStyle = FLOWERS[Math.floor(hash(o.n, k, 33) * FLOWERS.length)];
+      circle((hash(o.n, k, 34) - .5) * 6.4, (hash(o.n, k, 35) - .5) * 3.6, 0.5);
+    }
+    ctx.restore();
+  } else if (o.k === 'rip') {
+    ctx.strokeStyle = 'rgba(255,255,255,.4)'; ctx.lineWidth = 0.22;
+    ctx.beginPath(); ctx.arc(o.x, o.y, o.r, -2.5 - o.t, -0.3 - o.t); ctx.stroke();
+  } else if (o.k === 'boat') {
+    frameAt(o.x, o.y, o.t - o.rot);
+    ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(-.6, 4.5, 1.2, 7);
+    ctx.fillStyle = '#f1f4f8'; ctx.beginPath(); ctx.moveTo(0, -5); ctx.quadraticCurveTo(2, -2, 1.7, 4.5); ctx.lineTo(-1.7, 4.5); ctx.quadraticCurveTo(-2, -2, 0, -5); ctx.fill();
+    ctx.fillStyle = '#5a6b82'; ctx.fillRect(-1, -1.5, 2, 3);
+    ctx.restore();
+  } else if (o.k === 'chev') {                                            // 급커브 화살표 표지판
+    frameAt(o.x, o.y, o.t);
+    ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(-1.4, -0.8, 3.6, 2.4);
+    ctx.fillStyle = '#ffd400'; ctx.fillRect(-1.8, -1.2, 3.6, 2.4);
+    ctx.strokeStyle = '#15191f'; ctx.lineWidth = 0.45; ctx.lineJoin = 'miter'; ctx.beginPath();
+    for (const q of [-0.7, 0.5]) { const ax = q * o.turn; ctx.moveTo(ax - .5 * o.turn, -.8); ctx.lineTo(ax + .5 * o.turn, 0); ctx.lineTo(ax - .5 * o.turn, .8); }
+    ctx.stroke(); ctx.restore();
+  }
 }
 
+/* ---------- 화면 ---------- */
+const cam = { fx: 0, fy: 0, px: 7.5, sy: 0, A: 0 };
+function w2s(x, y) {                                   // 세상 좌표 → 화면 좌표 (글자·이모지용)
+  const dx = x - cam.fx, dy = y - cam.fy, c = Math.cos(cam.A), s = Math.sin(cam.A);
+  return [W / 2 + (dx * c - dy * s) * cam.px, cam.sy - (dx * s + dy * c) * cam.px];
+}
+function nextGateAt(s) { for (let i = 1; i <= CFG.GATE_COUNT; i++) if (GATE_S[i] > s) return i; return -1; }
+const ST = { s: [], x: [], y: [], nx: [], ny: [], k: [] };   // 이번 프레임에 그릴 도로 조각들(재사용)
+
 function render() {
-  const px = BASE * zoom, carSY = H * 0.8, Yc = car.Y, cx0 = center(Yc);
-  const toX = x => W / 2 + (x - cx0) * px, toY = y => carSY - (y - Yc) * px;
+  const px = BASE * zoom, carSY = H * 0.8;
+  cam.fx = pX(car.s); cam.fy = pY(car.s); cam.px = px; cam.sy = carSY; cam.A = camA;
+  const VR = Math.hypot(W, H) / px + 10;                // 화면에 보일 수 있는 최대 거리(m)
   ctx.save();
   if (shakeT > 0) ctx.translate((Math.random() - .5) * 8, (Math.random() - .5) * 8);
-  ctx.fillStyle = '#9c9b96'; ctx.fillRect(-20, -20, W + 40, H + 40);
-  cam.cx = cx0; cam.px = px; cam.Yc = Yc; cam.sy = carSY;
+  ctx.fillStyle = GROUND[envAt(car.s)][0]; ctx.fillRect(-20, -20, W + 40, H + 40);
+  ctx.translate(W / 2, carSY); ctx.scale(px, -px); ctx.rotate(camA); ctx.translate(-cam.fx, -cam.fy);
 
-  const step = 2, Ys = Math.floor((Yc - (H - carSY) / px - 8) / step) * step, Ye = Yc + carSY / px + 8;
-  for (let Y0 = Ys; Y0 < Ye; Y0 += step) {
-    const Y1 = Y0 + step, c0 = center(Y0), c1 = center(Y1), y0 = toY(Y0), y1 = toY(Y1) - 0.7, env = envAt(Y0);
-    const q = (a, b) => quad(toX(c0 + a), y0, toX(c0 + b), y0, toX(c1 + b), y1, toX(c1 + a), y1);  // 도로 중심 기준 가로 범위 [a,b]
-    const qt = (a, b) => quad(toX(c0 + a), y0, toX(c0 + b), y0, toX(c1 + b), y1 + 0.7, toX(c1 + a), y1 + 0.7);  // 반투명용(겹침 없이)
-    ctx.fillStyle = nearQuay(Y0) ? '#b3aa9b' : GROUND[env][Math.floor(Y0 / 16) % 2];
-    ctx.fillRect(-20, y1, W + 40, y0 - y1 + 0.7);
+  // 보이는 도로 조각 모으기 (U자 커브 건너편 도로도 포함)
+  let n = 0;
+  const sA = Math.max(LUT_S0 + 4, car.s - 520), sB = Math.min(FINISH_S + 590, car.s + 760);
+  for (let s = Math.floor(sA / 2) * 2; s <= sB; s += 2) {
+    const x = pX(s), y = pY(s);
+    if (Math.hypot(x - cam.fx, y - cam.fy) > VR + 180) continue;
+    const t = pT(s); ST.s[n] = s; ST.x[n] = x; ST.y[n] = y; ST.nx[n] = Math.cos(t); ST.ny[n] = -Math.sin(t); ST.k[n] = curv(s); n++;
+  }
+  const off = (o, k) => { if (o * k > 0) { const m = 0.92 / Math.abs(k); if (Math.abs(o) > m) return Math.sign(o) * m; } return o; };
+  let i0, i1, ext;                                       // 현재 조각의 시작/끝 인덱스, 이음새 겹침
+  const P = (i, o) => [ST.x[i] + ST.nx[i] * off(o, ST.k[i]), ST.y[i] + ST.ny[i] * off(o, ST.k[i])];
+  function q(a, b) {                                     // 도로 중심 기준 가로 범위 [a,b] 칠하기
+    const e = ext, fx = -ST.ny[i1] * e, fy = ST.nx[i1] * e;   // 앞쪽으로 살짝 늘려 이음새 숨김
+    const A = P(i0, a), B = P(i0, b), C = P(i1, b), D = P(i1, a);
+    ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.lineTo(C[0] + fx, C[1] + fy); ctx.lineTo(D[0] + fx, D[1] + fy); ctx.closePath(); ctx.fill();
+  }
+  const seg = i => ST.s[i + 1] - ST.s[i] === 2;
+  // 1) 땅
+  ext = 0.4;
+  for (let i = 0; i < n - 1; i++) {
+    if (!seg(i)) continue; i0 = i; i1 = i + 1; const s0 = ST.s[i];
+    ctx.fillStyle = nearQuay(s0) ? '#b3aa9b' : GROUND[envAt(s0)][0]; q(-170, 170);
+  }
+  // 2) 도로
+  for (let i = 0; i < n - 1; i++) {
+    if (!seg(i)) continue; i0 = i; i1 = i + 1;
+    const Y0 = ST.s[i], env = envAt(Y0);
+    if (Math.hypot(ST.x[i] - cam.fx, ST.y[i] - cam.fy) > VR + 40) continue;
+    ext = 0.25;
     if (env === 'city') { ctx.fillStyle = '#d5d0c6'; q(-HW - 8, -HW - 2.6); q(HW + 2.6, HW + 8); }          // 인도
     else if (env === 'park') { ctx.fillStyle = '#e0cfa4'; q(-HW - 12, -HW - 8); q(HW + 8, HW + 12); }      // 산책로
     if (env === 'water') {                                                                                    // 다리 상판 + 난간
@@ -747,69 +851,71 @@ function render() {
       ctx.fillStyle = (Math.floor(Y0 / 8) % 2) ? '#ffffff' : '#e8453c'; q(-HW - 2.6, -HW); q(HW, HW + 2.6);
     }
     ctx.fillStyle = (Math.floor(Y0 / 16) % 2) ? '#454a57' : '#3f4450'; q(-HW, HW);
-    if (Math.floor(Y0 / 6) % 2 === 0) { ctx.fillStyle = 'rgba(255,255,255,.5)'; qt(-.3, .3); }
-    if (Y0 >= 0 && Y0 < 2) { ctx.fillStyle = 'rgba(255,255,255,.85)'; qt(-HW, HW); }
-    if (env === 'city') {                                                                                     // 횡단보도
+    ext = 0;
+    if (Math.floor(Y0 / 6) % 2 === 0) { ctx.fillStyle = 'rgba(255,255,255,.5)'; q(-.3, .3); }
+    if (Y0 >= 0 && Y0 < 2) { ctx.fillStyle = 'rgba(255,255,255,.85)'; q(-HW, HW); }
+    if (env === 'city' && Math.abs(ST.k[i]) < 0.002 && Math.abs(curv(Y0 + 6)) < 0.002) {                                                        // 횡단보도 (곧은 길에만)
       const m = ((Y0 - 75) % 150 + 150) % 150;
-      if (m < 6) { ctx.fillStyle = 'rgba(255,255,255,.85)'; for (let a = -HW + 1; a < HW - 2; a += 3.2) qt(a, a + 1.6); }
+      if (m < 6) { ctx.fillStyle = 'rgba(255,255,255,.85)'; for (let a = -HW + 1; a < HW - 2; a += 3.2) q(a, a + 1.6); }
     }
-    const gi = Math.ceil((Y0 + 0.001) / CFG.GATE_GAP), g = gi * CFG.GATE_GAP, dd = g - Y0;
-    if (gi >= 1 && gi <= CFG.GATE_COUNT && dd > 0) {
-      if (dd <= CFG.PREVIEW) for (let k = 0; k < 3; k++) { ctx.fillStyle = CFG.LEVELS[k + 1].tint; qt(-HW + k * LANE_W, -HW + (k + 1) * LANE_W); }
+    const gi = nextGateAt(Y0), dd = gi > 0 ? GATE_S[gi] - Y0 : 1e9;
+    if (gi > 0 && dd > 0) {
+      if (Y0 >= TINT_FROM[gi]) for (let k = 0; k < 3; k++) { ctx.fillStyle = CFG.LEVELS[k + 1].tint; q(-HW + k * LANE_W, -HW + (k + 1) * LANE_W); }
       if (dd <= CFG.ZONE_LEN) for (let k = 1; k <= 2; k++) {
-        const e = -HW + k * LANE_W; ctx.fillStyle = (Math.floor(Y0 / 4) % 2) ? '#ffffff' : '#e8453c'; q(e - DIV, e + DIV);
+        const e = -HW + k * LANE_W; ctx.fillStyle = (Math.floor(Y0 / 4) % 2) ? '#ffffff' : '#e8453c'; ext = 0.25; q(e - DIV, e + DIV); ext = 0;
       }
     }
-    if (Y0 >= FINISH_Y - 4 && Y0 < FINISH_Y + 4) {
-      const cw = CFG.ROAD_W / 20;
+    if (Y0 >= FINISH_S - 4 && Y0 < FINISH_S + 4) {
+      const cw = CFG.ROAD_W / 20; ext = 0.25;
       for (let k = 0; k < 20; k++) { ctx.fillStyle = ((k + Math.floor(Y0 / 2)) % 2) ? '#ffffff' : '#15191f'; q(-HW + k * cw, -HW + (k + 1) * cw); }
+      ext = 0;
     }
   }
-  drawScenery(Ys, Ye);
+  // 3) 배경 물건
+  for (const o of SCN) if (Math.abs(o.x - cam.fx) < VR + 30 && Math.abs(o.y - cam.fy) < VR + 30) drawObj(o);
 
-  // 부스터 속도선
+  // 4) 자동차
+  frameAt(car.X, car.Y, car.phi + car.spin);
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; rr(-1.9, -3.0, 4, 7, 1.2);
   if (boost.t > 0 && state === 'DRIVING') {
+    ctx.fillStyle = Math.random() < .5 ? '#ffb300' : '#ff5a1f';
+    ctx.beginPath(); ctx.moveTo(-1, 3.4); ctx.lineTo(0, 5.8 + Math.random() * 1.8); ctx.lineTo(1, 3.4); ctx.fill();
+  }
+  ctx.fillStyle = '#14181f';
+  [[-2.1, -2.6], [1.4, -2.6], [-2.1, 1.2], [1.4, 1.2]].forEach(w => rr(w[0], w[1], 0.8, 1.8, 0.25));
+  ctx.fillStyle = '#e8453c'; rr(-1.7, -3.4, 3.4, 6.8, 1.2);
+  ctx.fillStyle = '#fff'; ctx.fillRect(-0.3, -3.4, 0.6, 6.8);
+  ctx.fillStyle = '#1b2a3a'; rr(-1.2, -1.3, 2.4, 1.5, 0.45);
+  ctx.fillStyle = '#222'; ctx.fillRect(-1.9, 2.7, 3.8, 0.7);
+  ctx.restore();
+
+  // 5) 톨게이트 아치
+  for (let i = 1; i <= CFG.GATE_COUNT; i++) {
+    const g = GATE_S[i], gx = pX(g), gy = pY(g); if (Math.hypot(gx - cam.fx, gy - cam.fy) > VR + 20) continue;
+    frameAt(gx, gy, pT(g));
+    const bh = 5.4, pw = 1.6;
+    ctx.fillStyle = '#2b2f3a'; ctx.fillRect(-HW - pw, -bh - 0.8, pw, bh + 1.6); ctx.fillRect(HW, -bh - 0.8, pw, bh + 1.6);
+    for (let k = 0; k < 3; k++) {
+      const L = CFG.LEVELS[k + 1], x = -HW + k * LANE_W, w = LANE_W;
+      ctx.fillStyle = L.color; ctx.fillRect(x, -bh, w, bh);
+      ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.fillRect(x, -0.5, w, 0.5);
+      ctx.fillStyle = '#10231a'; ctx.textAlign = 'center';
+      ctx.font = `900 2.1px ${FONT}`; ctx.fillText(L.name, x + w / 2, -bh * 0.55);
+      ctx.font = `700 1.3px ${FONT}`; ctx.fillText(`×${L.mul} · ${L.dur}초`, x + w / 2, -bh * 0.2);
+    }
+    ctx.font = `800 1.7px ${FONT}`; ctx.textAlign = 'center'; ctx.lineWidth = 0.5; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineJoin = 'round';
+    ctx.strokeText(`문제 ${i}/${CFG.GATE_COUNT}`, 0, -bh - 1.5); ctx.fillStyle = '#fff'; ctx.fillText(`문제 ${i}/${CFG.GATE_COUNT}`, 0, -bh - 1.5);
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // 6) 화면에 붙는 효과
+  if (boost.t > 0 && state === 'DRIVING') {              // 부스터 속도선
     ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 2; ctx.beginPath();
     for (let i = 0; i < 16; i++) { const x = Math.random() * W, y = Math.random() * H, l = 40 + Math.random() * 70; ctx.moveTo(x, y); ctx.lineTo(x, y + l); }
     ctx.stroke();
   }
-
-  // 자동차
-  {
-    const s = px, x = toX(car.X);
-    ctx.save(); ctx.translate(x, carSY); ctx.rotate(car.phi + car.spin);
-    ctx.fillStyle = 'rgba(0,0,0,.25)'; rr(-1.9 * s, -3.0 * s, 4 * s, 7 * s, 1.2 * s);
-    if (boost.t > 0 && state === 'DRIVING') {
-      ctx.fillStyle = Math.random() < .5 ? '#ffb300' : '#ff5a1f';
-      ctx.beginPath(); ctx.moveTo(-1 * s, 3.4 * s); ctx.lineTo(0, (5.8 + Math.random() * 1.8) * s); ctx.lineTo(1 * s, 3.4 * s); ctx.fill();
-    }
-    ctx.fillStyle = '#14181f';
-    [[-2.1, -2.6], [1.4, -2.6], [-2.1, 1.2], [1.4, 1.2]].forEach(w => rr(w[0] * s, w[1] * s, 0.8 * s, 1.8 * s, 0.25 * s));
-    ctx.fillStyle = '#e8453c'; rr(-1.7 * s, -3.4 * s, 3.4 * s, 6.8 * s, 1.2 * s);
-    ctx.fillStyle = '#fff'; ctx.fillRect(-0.3 * s, -3.4 * s, 0.6 * s, 6.8 * s);
-    ctx.fillStyle = '#1b2a3a'; rr(-1.2 * s, -1.3 * s, 2.4 * s, 1.5 * s, 0.45 * s);
-    ctx.fillStyle = '#222'; ctx.fillRect(-1.9 * s, 2.7 * s, 3.8 * s, 0.7 * s);
-    ctx.restore();
-    if (state === 'SPIN') { ctx.font = `${Math.max(22, px * 3)}px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('💫', x, carSY - 4.5 * px); }
-  }
-
-  // 톨게이트 아치
-  for (let i = 1; i <= CFG.GATE_COUNT; i++) {
-    const y = toY(i * CFG.GATE_GAP); if (y < -140 || y > H + 140) continue;
-    const c = center(i * CFG.GATE_GAP), bh = Math.max(40, px * 5.4), pw = Math.max(8, px * 1.6);
-    ctx.fillStyle = '#2b2f3a'; ctx.fillRect(toX(c - HW) - pw, y - bh - 6, pw, bh + 12); ctx.fillRect(toX(c + HW), y - bh - 6, pw, bh + 12);
-    for (let k = 0; k < 3; k++) {
-      const L = CFG.LEVELS[k + 1], x = toX(c - HW + k * LANE_W), w = LANE_W * px;
-      ctx.fillStyle = L.color; ctx.fillRect(x, y - bh, w, bh);
-      ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.fillRect(x, y - 4, w, 4);
-      ctx.fillStyle = '#10231a'; ctx.textAlign = 'center';
-      ctx.font = `900 ${Math.max(15, px * 2.1)}px ${FONT}`; ctx.fillText(L.name, x + w / 2, y - bh * 0.55);
-      ctx.font = `700 ${Math.max(11, px * 1.3)}px ${FONT}`; ctx.fillText(`×${L.mul} · ${L.dur}초`, x + w / 2, y - bh * 0.2);
-    }
-    ctx.font = `800 ${Math.max(13, px * 1.7)}px ${FONT}`; ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,.55)';
-    ctx.strokeText(`문제 ${i}/${CFG.GATE_COUNT}`, toX(c), y - bh - 12); ctx.fillStyle = '#fff'; ctx.fillText(`문제 ${i}/${CFG.GATE_COUNT}`, toX(c), y - bh - 12);
-  }
-  ctx.restore();
+  if (state === 'SPIN') { const [sx, sy] = w2s(car.X, car.Y); ctx.font = `${Math.max(22, px * 3)}px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('💫', sx, sy - 4.5 * px); }
   drawHUD();
 }
 
@@ -824,8 +930,8 @@ function drawHUD() {
   ctx.textAlign = 'left'; ctx.fillStyle = '#ffc933'; ctx.font = `900 28px ${FONT}`; ctx.fillText(`⏱ ${(t / 1000).toFixed(1)}초`, 16, 38);
   const bw = Math.min(W * 0.34, 420), bx = W / 2 - bw / 2;
   ctx.fillStyle = 'rgba(255,255,255,.2)'; ctx.fillRect(bx, 24, bw, 8);
-  ctx.fillStyle = '#ffc933'; ctx.fillRect(bx, 24, bw * clamp(car.Y / FINISH_Y, 0, 1), 8);
-  for (let i = 1; i <= CFG.GATE_COUNT; i++) { ctx.fillStyle = i < nextGate ? '#2ecc71' : '#fff'; ctx.fillRect(bx + bw * (i * CFG.GATE_GAP / FINISH_Y) - 1.5, 19, 3, 18); }
+  ctx.fillStyle = '#ffc933'; ctx.fillRect(bx, 24, bw * clamp(car.s / FINISH_S, 0, 1), 8);
+  for (let i = 1; i <= CFG.GATE_COUNT; i++) { ctx.fillStyle = i < nextGate ? '#2ecc71' : '#fff'; ctx.fillRect(bx + bw * (GATE_S[i] / FINISH_S) - 1.5, 19, 3, 18); }
   ctx.textAlign = 'right'; ctx.fillStyle = '#fff'; ctx.font = `800 18px ${FONT}`;
   ctx.fillText(`문제 ${Math.min(nextGate, CFG.GATE_COUNT)}/${CFG.GATE_COUNT}   ${Math.round(car.vm * 3.6)}km/h`, W - 64, 36);
   if (boost.t > 0 && state === 'DRIVING') {
@@ -833,9 +939,9 @@ function drawHUD() {
     ctx.fillStyle = '#ff8a1f'; ctx.fillRect(0, 56, W * clamp(boost.t / (L ? L.dur : 3), 0, 1), 5);
     outlined(`BOOST ×${boost.mul}`, W / 2, 96, 26, '#ffb300');
   }
-  const dist = nextGate <= CFG.GATE_COUNT ? nextGate * CFG.GATE_GAP - car.Y : 999;
+  const dist = nextGate <= CFG.GATE_COUNT ? GATE_S[nextGate] - car.s : 999;
   if (state === 'DRIVING' && dist < 190 && dist > 8) outlined(`🚦 문제 ${nextGate}! 가고 싶은 길로 들어가요`, W / 2, H * 0.2, 24, '#ffffff');
-  if (state === 'DRIVING') { const cw = curveAhead(car.Y); if (cw) outlined(cw, W / 2, H * 0.36, Math.min(26, W / 30), cw.startsWith('⚠️') ? '#ffb300' : '#9be7ff'); }
+  if (state === 'DRIVING') { const cw = curveAhead(car.s); if (cw) outlined(cw, W / 2, H * 0.36, Math.min(26, W / 30), cw.startsWith('⚠️') ? '#ffb300' : '#9be7ff'); }
   if (state === 'COUNTDOWN') outlined(cdT > 1.6 ? '3' : cdT > 0.8 ? '2' : '1', W / 2, H * 0.42, H * 0.28, '#ffc933');
   if (toastT > 0 && state !== 'FINISH') outlined(ZONE_NAME[envNow] || '', W / 2, H * 0.28, 24, '#ffffff');
   if (goT > 0) outlined('GO!', W / 2, H * 0.42, H * 0.28, '#2ecc71');
@@ -850,8 +956,8 @@ function frame(now) {
   if (goT > 0) goT -= dt;
   if (toastT > 0) toastT -= dt;
   if (state === 'MENU') {
-    menuY = (menuY + 24 * dt) % (FINISH_Y - 200);
-    car.Y = menuY; car.X = center(menuY); car.phi = Math.atan(slope(menuY)); car.vm = 0; car.v = 0;
+    menuS = (menuS + 24 * dt) % (FINISH_S - 200);
+    car.s = menuS; car.d = 0; placeOnPath(car, menuS, 0); car.phi = pT(menuS); car.vm = 0; car.v = 0;
   } else if (state === 'COUNTDOWN') {
     const prev = Math.ceil(cdT / 0.8); cdT -= dt;
     if (Math.ceil(cdT / 0.8) !== prev && cdT > 0) sfx.tick();
@@ -860,11 +966,13 @@ function frame(now) {
   else if (state === 'SPIN') updateSpin(dt);
 
   if (state !== 'MENU') {
-    const dist = nextGate <= CFG.GATE_COUNT ? nextGate * CFG.GATE_GAP - car.Y : 999;
+    const dist = nextGate <= CFG.GATE_COUNT ? GATE_S[nextGate] - car.s : 999;
     const near = clamp((190 - dist) / 50, 0, 1), fast = clamp((car.vm - 30) / 55, 0, 1);
     const target = (1 - 0.30 * near) * (1 - 0.28 * fast);
     zoom += (target - zoom) * Math.min(1, dt * 3);
   } else zoom += (1 - zoom) * Math.min(1, dt * 3);
+  // 화면 회전: 차가 달리는 도로 방향이 항상 위쪽이 되도록 부드럽게 따라가요 (오답 회전 때는 화면이 돌지 않음)
+  camA += (pT(car.s + 6) - camA) * Math.min(1, dt * 3.5);
   render();
   requestAnimationFrame(frame);
 }
