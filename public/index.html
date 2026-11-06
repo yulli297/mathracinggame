@@ -41,6 +41,7 @@
   .qtop{display:flex;align-items:center;gap:10px;font-weight:800}
   #qlv{padding:3px 12px;border-radius:99px;color:#10231a}
   #qexpr{margin:10px 0 2px;font-size:clamp(34px,6.4vw,76px);font-weight:900;text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap}
+  #qpause{font-size:clamp(12px,1.6vw,16px);font-weight:800;color:#9be7ff;background:rgba(155,231,255,.12);padding:4px 10px;border-radius:999px}
   #qnote{min-height:1.4em;text-align:center;font-size:clamp(14px,1.9vw,20px);color:var(--sun);font-weight:700}
   #qans{margin:10px auto 8px;min-width:60%;padding:6px 18px;border-radius:12px;background:rgba(0,0,0,.35);border:3px solid var(--sun);text-align:center;font-size:clamp(32px,5vw,56px);font-weight:900;font-variant-numeric:tabular-nums;min-height:1.35em}
   #qans.shake{animation:shake .25s}
@@ -107,7 +108,7 @@
 <!-- 문제 화면 -->
 <div id="quiz" class="hidden">
   <div class="qleft">
-    <div class="qtop"><span id="qlv"></span><span id="qno"></span></div>
+    <div class="qtop"><span id="qlv"></span><span id="qpause">⏱ 문제 푸는 동안은 시간이 멈춰요</span><span id="qno"></span></div>
     <div id="qexpr"></div>
     <div id="qnote"></div>
     <div id="qans"><span id="qansText"></span><span class="cur"></span></div>
@@ -251,6 +252,7 @@ const CFG = {
   BOUNCE_DEG: 18, BUMP_SLOW: 0.6,          // 벽 충돌: 중앙 쪽으로 18도 자동 정렬 + 속도 40% 감소
   SPIN_SEC: 2.0, SPIN_RATE: 10,            // 오답: 제자리 2초 회전
   WRONG_BANNER_MS: 3500, RIGHT_BANNER_MS: 1600,
+  CAM_FOLLOW: 1.2, CAM_MAX_TURN: 0.55,      // 화면 회전: 따라가는 정도, 최대 회전 속도(라디안/초). 더 어지러우면 둘 다 줄이세요
   LEVELS: {                                // mul: 가속 배율, dur: 부스터 지속(초, 주행 중에만 흐름)
     1: { name: '쉬움',   color: '#2ecc71', tint: 'rgba(46,204,113,.30)', mul: 1.3, dur: 2.0 },
     2: { name: '보통',   color: '#f1c40f', tint: 'rgba(241,196,15,.30)', mul: 1.6, dur: 3.0 },
@@ -394,6 +396,7 @@ function resetRace() {
 resetRace();
 
 function setState(s) {
+  // 기록 시간은 메인 루프에서 '달리는 중(오답 회전 포함)'일 때만 쌓여요 → 문제 푸는 동안은 0.1초도 안 흘러요
   state = s;
   $('menu').classList.toggle('hidden', s !== 'MENU');
   $('quiz').classList.toggle('hidden', s !== 'QUIZ');
@@ -612,7 +615,7 @@ $('padClear').addEventListener('pointerdown', e => { e.preventDefault(); padInit
 
 /* ---------- 완주 / 결과 ---------- */
 function finish() {
-  raceTime = performance.now() - raceStart; car.v = 0; car.vm = 0;
+  car.v = 0; car.vm = 0;
   setState('FINISH'); sfx.finish();
   const okN = results.filter(r => r.ok).length;
   $('rtime').textContent = fmtT(raceTime);
@@ -925,7 +928,7 @@ function outlined(text, x, y, size, color) {
 }
 function drawHUD() {
   if (state === 'MENU') return;
-  const t = state === 'FINISH' ? raceTime : (raceStart ? performance.now() - raceStart : 0);
+  const t = raceTime;
   ctx.fillStyle = 'rgba(16,35,26,.82)'; ctx.fillRect(0, 0, W, 56);
   ctx.textAlign = 'left'; ctx.fillStyle = '#ffc933'; ctx.font = `900 28px ${FONT}`; ctx.fillText(`⏱ ${(t / 1000).toFixed(1)}초`, 16, 38);
   const bw = Math.min(W * 0.34, 420), bx = W / 2 - bw / 2;
@@ -961,9 +964,9 @@ function frame(now) {
   } else if (state === 'COUNTDOWN') {
     const prev = Math.ceil(cdT / 0.8); cdT -= dt;
     if (Math.ceil(cdT / 0.8) !== prev && cdT > 0) sfx.tick();
-    if (cdT <= 0) { setState('DRIVING'); raceStart = performance.now(); goT = 0.8; sfx.go(); }
-  } else if (state === 'DRIVING') updateDriving(dt);
-  else if (state === 'SPIN') updateSpin(dt);
+    if (cdT <= 0) { setState('DRIVING'); raceStart = performance.now(); raceTime = 0; goT = 0.8; sfx.go(); }
+  } else if (state === 'DRIVING') { raceTime += dt * 1000; updateDriving(dt); }
+  else if (state === 'SPIN') { raceTime += dt * 1000; updateSpin(dt); }
 
   if (state !== 'MENU') {
     const dist = nextGate <= CFG.GATE_COUNT ? GATE_S[nextGate] - car.s : 999;
@@ -971,8 +974,8 @@ function frame(now) {
     const target = (1 - 0.30 * near) * (1 - 0.28 * fast);
     zoom += (target - zoom) * Math.min(1, dt * 3);
   } else zoom += (1 - zoom) * Math.min(1, dt * 3);
-  // 화면 회전: 차가 달리는 도로 방향이 항상 위쪽이 되도록 부드럽게 따라가요 (오답 회전 때는 화면이 돌지 않음)
-  camA += (pT(car.s + 6) - camA) * Math.min(1, dt * 3.5);
+  // 화면 회전: 도로 방향을 천천히 따라가요 (어지럽지 않게 최대 회전 속도 제한, 오답 회전 때는 화면이 돌지 않음)
+  { const diff = pT(car.s + 25) - camA, step = clamp(diff * dt * CFG.CAM_FOLLOW, -CFG.CAM_MAX_TURN * dt, CFG.CAM_MAX_TURN * dt); camA += step; }
   render();
   requestAnimationFrame(frame);
 }
